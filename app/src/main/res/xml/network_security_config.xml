@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  网络安全配置：放行明文 HTTP。
+
+  ## 为什么必须放行
+
+  MCP 服务端绝大多数跑在**局域网**（`http://192.168.1.55:3000/mcp`）或**本机**
+  （`http://127.0.0.1:3000/mcp`，配 `adb reverse`），全是明文。
+  Manifest 里 `usesCleartextTraffic="false"` 会全局禁止明文，
+  不放行的话这些服务端**一个都连不上**。
+
+  ## 为什么是全量放行，而不是按网段白名单
+
+  我先试了按网段写 `<domain>`，但 **network-security-config 只接受域名或 IP 字面量，
+  不支持 CIDR**（没有 `192.168.0.0/16` 这种写法）。想覆盖「任意局域网 IP」
+  就得把 192.168.x.x 的 65536 个地址全列出来 —— 不现实。
+  所以只能全量放行 `cleartextTrafficPermitted="true"`。
+
+  ## 这个选择的代价（如实记录）
+
+  放行后，应用**也会允许**访问任意 `http://` 公网地址。
+  也就是说「公网必须 HTTPS」这条底线没有了。
+
+  缓解措施：应用自身的网络请求（模型商店、Skill 安装）全部走 HTTPS，
+  明文只可能出现在**用户自己填的 MCP 服务端地址**上。
+  如果以后要收紧，正确做法是不用这个文件，改成让用户为每个自建服务端
+  单独确认一次，或只允许 RFC1918 地址（需要在代码里校验，而不是靠配置）。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
