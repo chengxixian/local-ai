@@ -8,34 +8,39 @@
 
 ---
 
-## ⚠️ 先说清楚：这个项目的真实状态
+## 项目状态：**开发测试中**
 
-**这是一个未完成、且关键路径没跑通的工程项目。** 与其粉饰，不如把问题列清楚，这样别人接手能少走弯路。
+这个项目正在积极开发和真机测试。核心链路（模型商店、下载、Skill、MCP、记忆库）已经跑通；
+对话链路还在调试中，目前**不建议用于日常使用**。
 
-### 已经跑通的
+下面把「已跑通」和「调试中」分开列，是为了让参与开发的人清楚当前进度，
+不是在宣布项目完成或停滞。
 
-| 功能 | 状态 | 证据 |
+### 已跑通的
+
+| 功能 | 状态 | 说明 |
 |---|---|---|
-| 模型商店 | ✅ | 三个数据源（MNN 官方清单 / HuggingFace `taobao-mnn` / 魔搭搜索），解析 134 个模型 |
+| 模型商店 | ✅ | 三个数据源（MNN 官方清单 / HuggingFace `taobao-mnn` / 魔搭搜索） |
 | 模型下载 | ✅ | 断点续传、镜像改写、进度回调；实测下载 522 MB 模型成功 |
 | Skill 库 | ✅ | 内置索引 + GitHub 安装 + 启用停用 + 注入对话系统提示词 |
 | MCP 客户端 | ✅ | JSON-RPC 2.0 over Streamable HTTP，**同时处理 `application/json` 与 `text/event-stream`** |
 | 记忆库 | ✅ | SQLite FTS4（CJK 按字+bigram 分词）+ 可选向量检索 |
 | 动态取色 | ✅ | Monet，跟随壁纸 |
 | 液态玻璃 dock | ✅ | 含 lens 折射、progressive blur、颗粒 |
-| **DeepSeek API 调用** | ✅ | 设备上实测通过（含流式 SSE、`thinking` 参数、`reasoning_content`） |
+| DeepSeek API 调用 | ✅ | 设备上实测通过（含流式 SSE、`thinking` 参数、`reasoning_content`） |
 
-### 没跑通的（需要帮助的地方）
+### 调试中的
 
-| 问题 | 症状 | 已查到的线索 |
+| 问题 | 当前症状 | 已经查到的线索 |
 |---|---|---|
-| **本地 LLM 只输出 1 个 token** | `decode_len=1`，模型立刻吐 `<eop>` | `enable_thinking` 开关无效（MNN 的 `LlmConfig` 是浅合并，`jinja` 被 `llm_config.json` 整体覆盖）；模型模板在关闭思考时会插入**空 `<think></think>` 块**，社区报告这会让 Qwen3.5 直接结束 |
-| **对话界面不显示 API 返回** | 请求发出、服务端有响应，界面空白 | 日志显示「生成开始：路径=API」后**无任何 token 日志**；需要排查 SSE 读取 / 协程缓冲 / 重组链路 |
-| 文生图 | 未接入 | 官方 diffusion JNI 未移植，`UnavailableDiffusionEngine` 占位 |
-| 端侧模型转换 | 未验证 | 官方纯 C++ 转换器（ONNX/TFLite/Caffe/TorchScript）已编进 APK，但没跑过一次 |
-| 语音 STT / TTS | 未验证 | sherpa-mnn JNI 已接入（94 个导出符号），没跑过一次 |
+| 本地 LLM 输出 | 只出 1 个 token，`decode_len=1`，模型立刻吐 `<eop>` | `enable_thinking` 开关经 extra config 传**不生效**（MNN 的 `LlmConfig` 是浅合并，`jinja` 被 `llm_config.json` 整体覆盖）；模型自带的模板在关闭思考时会插入**空 `<think></think>` 块**，社区报告这会让 Qwen3.5 直接结束生成 |
+| 对话界面渲染 | 请求已发出、服务端有响应，界面空白 | 日志显示「生成开始：路径=API」之后**没有任何 token 日志**；待排查 SSE 读取 / 协程缓冲 / 重组链路 |
+| 文生图 | 未接入 | 官方 diffusion JNI 尚未移植，`UnavailableDiffusionEngine` 占位 |
+| 端侧模型转换 | 未实机验证 | 官方纯 C++ 转换器（ONNX/TFLite/Caffe/TorchScript）已编进 APK，还没跑过完整流程 |
+| 语音 STT / TTS | 未实机验证 | sherpa-mnn JNI 已接入（94 个导出符号），还没跑过 |
 
-**如果你要接手：先看 `docs/DEBUGGING.md`**（若存在），里面有完整的排查记录，包括**已经排除掉的方向** —— 那些看似可疑但其实无辜的地方。
+**开发笔记**：`docs/DEBUGGING.md`（若有）记录了完整的排查过程，**包括已经排除掉的方向** ——
+那些看着可疑但实测无辜的地方，能省下重复排查的时间。
 
 ---
 
