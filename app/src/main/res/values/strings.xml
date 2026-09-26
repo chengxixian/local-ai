@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 应用名。改名后要连 label 一起改，否则桌面图标还是旧名字。 -->
+    <string name="app_name">Local AI</string>
+</resources>
