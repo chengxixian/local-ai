@@ -1,0 +1,95 @@
+{
+  "_comment": "精选 Skill 索引。字段名必须与 SkillManager.loadIndex() 逐字一致。",
+  "_schema": {
+    "id": "唯一标识",
+    "name": "展示名（可与 SKILL.md 的 name 不同）",
+    "description": "一句话说明，会注入提示词索引",
+    "owner": "GitHub 用户名",
+    "repo": "仓库名",
+    "branch": "分支，默认 main",
+    "path": "仓库内子目录，留空表示仓库根",
+    "license": "许可标识"
+  },
+  "skills": [
+    {
+      "id": "skill-creator",
+      "name": "Skill 编写助手",
+      "description": "教你按 Agent Skills 规范编写新的 SKILL.md，包含 frontmatter 字段校验与结构建议。",
+      "owner": "anthropics",
+      "repo": "skills",
+      "branch": "main",
+      "path": "skill-creator",
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "artifacts-builder",
+      "name": "产物构建器",
+      "description": "把需求拆成可交付的文件产物（文档、脚本、配置），并给出目录结构建议。",
+      "owner": "anthropics",
+      "repo": "skills",
+      "branch": "main",
+      "path": "artifacts-builder",
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "mcp-builder",
+      "name": "MCP 服务端构建器",
+      "description": "协助编写 MCP 服务端：JSON-RPC 握手、tools/list 与 tools/call 的实现要点。",
+      "owner": "anthropics",
+      "repo": "skills",
+      "branch": "main",
+      "path": "mcp-builder",
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "pdf",
+      "name": "PDF 处理",
+      "description": "读取、拆分、合并、填表与提取 PDF 文本的常规做法与命令行工具用法。",
+      "owner": "anthropics",
+      "repo": "skills",
+      "branch": "main",
+      "path": "pdf",
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "docx",
+      "name": "Word 文档",
+      "description": "生成与修改 .docx：样式、标题层级、表格与批注的处理要点。",
+      "owner": "anthropics",
+      "repo": "skills",
+      "branch": "main",
+      "path": "docx",
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "xlsx",
+      "name": "Excel 表格",
+      "description": "生成与解析 .xlsx：公式、数据透视、单元格格式与大数据量写入的取舍。",
+      "owner": "anthropics",
+      "repo": "skills",
+      "branch": "main",
+      "path": "xlsx",
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "pptx",
+      "name": "PowerPoint",
+      "description": "生成演示文稿：母版、版式、图表与演讲备注的组织方式。",
+      "owner": "anthropics",
+      "repo": "skills",
+      "branch": "main",
+      "path": "pptx",
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "code-review",
+      "name": "代码审查",
+      "description": "按「正确性 → 边界 → 可读性 → 性能」顺序审查改动，输出可执行的修改建议。",
+      "owner": "anthropics",
+      "repo": "skills",
+      "branch": "main",
+      "path": "",
+      "license": "Apache-2.0"
+    }
+  ]
+}
