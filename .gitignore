@@ -1,0 +1,49 @@
+# ── Android / Gradle ──
+*.iml
+.gradle/
+build/
+local.properties
+.cxx/
+.kotlin/
+captures/
+.externalNativeBuild/
+
+# ── IDE ──
+.idea/
+*.hprof
+.vscode/
+
+# ── 签名与密钥 ──
+#
+# ⚠️ 签名文件绝不入库。本项目目前用的是一个本地自签名 keystore，
+# 仅供自己装机测试；正式发布请自己生成一份并放到 CI 的密钥里。
+*.jks
+*.keystore
+keystore.properties
+
+# ── 原生库（体积大，且需自行构建） ──
+#
+# `libMNN.so` / `libMNNConvertDeps.so` / `libsherpa-mnn-jni.so` 由
+# `scripts/build-mnn-android.ps1` 从 MNN 源码构建后放入 jniLibs。
+# 不宜入库（单个 libMNN.so 就 4.7 MB，且与 MNN 版本强绑定）。
+app/src/main/jniLibs/**/*.so
+core/src/main/jniLibs/**/*.so
+
+# ── 模型 ──
+#
+# 模型一律不入库：本项目的设计就是「模型由用户在应用内下载」。
+*.mnn
+*.mnn.weight
+*.safetensors
+*.gguf
+*.onnx
+
+# ── 本地调试遗留 ──
+*.log
+*.apk
+*.aab
+probe/
+deliverables/
+_ours_backup/
+*.mnnkit-orig
+node_modules/
