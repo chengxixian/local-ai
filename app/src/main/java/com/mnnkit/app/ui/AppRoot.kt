@@ -326,6 +326,9 @@ fun AppRoot(container: AppContainer, modifier: Modifier = Modifier) {
             // 否则会出现「切到 API 后模型看不到记忆 / 看不到 Skill 索引」这种偏差 ——
             // 那种 bug 很难查，因为界面看起来一切正常。
             val acc = StringBuilder()
+            // 思考过程单独累积：它是**另一条流**（delta.reasoning_content），
+            // 不能拼进 acc —— 否则最终回答里会夹进整段「让我想想…」。
+            val think = StringBuilder()
             messages = messages + ChatMessageUi("assistant", "")
             val apiForChat = container.apiProviders.active()?.takeIf { it.canChat }
 
@@ -353,9 +356,20 @@ fun AppRoot(container: AppContainer, modifier: Modifier = Modifier) {
                         thinking = OpenAiCompatibleClient.ThinkingEffort.fromId(
                             settingsState.thinkingEffort,
                         ),
-                    ).collect { token ->
-                        acc.append(token)
-                        messages = messages.dropLast(1) + ChatMessageUi("assistant", acc.toString())
+                    ).collect { delta ->
+                        // 两条流分开累积，界面按 [ChatMessageUi.reasoning] 折叠展示。
+                        when (delta) {
+                            is OpenAiCompatibleClient.ChatDelta.Content ->
+                                acc.append(delta.text)
+
+                            is OpenAiCompatibleClient.ChatDelta.Reasoning ->
+                                think.append(delta.text)
+                        }
+                        messages = messages.dropLast(1) + ChatMessageUi(
+                            role = "assistant",
+                            text = acc.toString(),
+                            reasoning = think.toString().ifBlank { null },
+                        )
                     }
                 } else {
                     container.llmEngine.stream(full, config).collect { token ->
@@ -377,19 +391,26 @@ fun AppRoot(container: AppContainer, modifier: Modifier = Modifier) {
                 generating = false
             }
 
-            // 流正常结束但一个字都没收到 —— 这在「推理模型把预算全花在
-            // reasoning_content 上」时会发生（官方 thinking 默认 enabled）。
-            // 早期版本这里会留一个空气泡，看起来像「调用失败」却没有任何提示。
+            // 流正常结束但正文一个字都没有。
+            //
+            // 分两种情况，提示不一样：
+            //   * 有思考内容 ⇒ 推理模型把 `max_tokens` 全花在 reasoning 上了。
+            //     气泡里已经折叠展示了思考，所以这里只补一句说明，不删消息。
+            //   * 连思考也没有 ⇒ 服务端真的没返回任何内容。
             if (acc.isEmpty() && chatError == null) {
                 val effort = OpenAiCompatibleClient.ThinkingEffort.fromId(
                     settingsState.thinkingEffort,
                 )
-                chatError = if (apiForChat != null) {
-                    "模型没有返回正文内容（只产生了思考内容）。" +
-                        "把输入框的思考强度调成「关闭思考」再试，或加大最大生成长度。" +
+                chatError = when {
+                    think.isNotEmpty() -> "模型只产生了思考内容，正文被 max_tokens 截断。" +
+                        "展开气泡里的「思考过程」可以看到它想了什么；" +
+                        "把思考强度调成「关闭思考」或加大最大生成长度再试。" +
                         "当前档位：${effort.label}"
-                } else {
-                    "模型没有返回内容。"
+
+                    apiForChat != null -> "模型没有返回任何内容（思考与正文都是空的）。" +
+                        "当前档位：${effort.label}"
+
+                    else -> "模型没有返回内容。"
                 }
             }
 

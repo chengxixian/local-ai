@@ -1,6 +1,8 @@
 package com.mnnkit.app.ui.screens
 
 import android.graphics.BitmapFactory
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -27,7 +29,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Memory
+import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.Icon
@@ -42,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -103,6 +108,13 @@ data class ChatMessageUi(
     val imagePath: String? = null,
     /** 朗读产出的音频文件绝对路径，用于「下载音频」。 */
     val audioPath: String? = null,
+    /**
+     * 推理模型的思考过程（API 的 `delta.reasoning_content`）。
+     *
+     * **与 [text] 是两条独立的流**，不能拼在一起 —— 否则用户看到的「回答」
+     * 里会夹进整段「让我想想…」的思考文字。界面上默认折叠，点标题可展开。
+     */
+    val reasoning: String? = null,
 )
 
 /** 输入区浮层的高度预留（列表底部要给它让位，否则最后一条消息被盖住）。 */
@@ -303,7 +315,9 @@ private fun MessageBubble(
             },
         ) {
             Column(
-                Modifier.padding(MnnSpacing.card),
+                Modifier
+                    .padding(MnnSpacing.card)
+                    .animateContentSize(),
                 verticalArrangement = Arrangement.spacedBy(MnnSpacing.tight),
             ) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -361,6 +375,16 @@ private fun MessageBubble(
                     GeneratedImage(path = path, onClick = { zoomed = path })
                 }
 
+                // 思考过程：默认**折叠**。推理模型的 reasoning_content 可能比正文
+                // 还长，直接铺开会把真正的回答顶到屏幕外。
+                msg.reasoning?.takeIf { it.isNotBlank() }?.let { reasoning ->
+                    ReasoningBlock(
+                        reasoning = reasoning,
+                        // 正文还没开始 ⇒ 模型仍在思考阶段，标题显示「思考中…」。
+                        streaming = msg.text.isBlank(),
+                    )
+                }
+
                 if (msg.text.isNotBlank() || msg.imagePath == null) {
                     Text(
                         msg.text.ifEmpty { "…" },
@@ -383,6 +407,81 @@ private fun MessageBubble(
             onDismiss = { zoomed = null },
             onDownload = { onDownloadImage(path) },
         )
+    }
+}
+
+/**
+ * 「思考过程」折叠块。
+ *
+ * ## 为什么默认折叠
+ * 推理模型（DeepSeek 的 reasoner / flash、QwQ 等）的 `reasoning_content`
+ * 经常比正文还长。全铺开会把真正的回答顶出屏幕，用户以为「没回答」。
+ *
+ * ## 为什么用 `remember { mutableStateOf }` 而不是 rememberSaveable
+ * 它只在**当前这条消息**上有效；[reasoning] 变化时不需要保留展开态
+ * （同一条消息的思考文本是追加增长的，展开/收起由用户自己控制）。
+ */
+@Composable
+private fun ReasoningBlock(reasoning: String, streaming: Boolean) {
+    var expanded by remember { mutableStateOf(false) }
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        label = "reasoning-arrow",
+    )
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(MnnRadii.small))
+            .background(MnnTextColor.secondary.copy(alpha = 0.08f))
+            .clickable { expanded = !expanded }
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+            .animateContentSize(),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Rounded.Psychology,
+                contentDescription = null,
+                tint = MnnTextColor.secondary,
+                modifier = Modifier.size(16.dp),
+            )
+            Text(
+                // 正文还没到 ⇒ 模型还在思考阶段。
+                text = if (streaming) "思考中…" else "思考过程",
+                style = MiuixTheme.textStyles.footnote1,
+                color = MnnTextColor.secondary,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = 6.dp),
+            )
+            Icon(
+                Icons.Rounded.ExpandMore,
+                contentDescription = if (expanded) "收起" else "展开",
+                tint = MnnTextColor.secondary,
+                modifier = Modifier
+                    .size(18.dp)
+                    .rotate(arrowRotation),
+            )
+        }
+
+        if (expanded) {
+            Text(
+                text = reasoning,
+                style = MiuixTheme.textStyles.footnote1,
+                color = MnnTextColor.secondary,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        } else {
+            // 折叠态给一行预览，让用户知道里面有内容、值不值得点开。
+            Text(
+                text = reasoning,
+                style = MiuixTheme.textStyles.footnote1,
+                color = MnnTextColor.secondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
     }
 }
 

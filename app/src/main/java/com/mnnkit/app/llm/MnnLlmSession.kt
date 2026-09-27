@@ -407,11 +407,30 @@ class MnnLlmSession internal constructor(
             /**
              * 是否开启思考模式。见 [com.mnnkit.app.data.api.OpenAiCompatibleClient.ThinkingEffort]。
              *
-             * ⚠️ 对**本地**模型，这个值通过 extra config 传是**不可靠的** ——
-             * MNN 的 `LlmConfig` 会做浅合并，`jinja` 整个被 `llm_config.json`
-             * 的同名键替换掉，我们塞的字段到不了模型。
-             * 真正生效的是 [com.mnnkit.app.llm.ModelConfigPatcher] 对模型目录里
-             * 文件的修正。这里仍然传一份，作为「万一合并语义变了」的兜底。
+             * ## 事实核对（别再照抄旧结论）
+             *
+             * 这里曾经写着「经 extra config 传 `enable_thinking` **不生效**，
+             * 因为 MNN 的 `LlmConfig` 是浅合并、`jinja` 被 `llm_config.json`
+             * 整体覆盖」。**那个结论是错的**，已在 MNN 源码里逐行核对：
+             *
+             *  - `LlmConfig::LlmConfig` 用 `config_.merge(llm_config_)`
+             *    （`transformers/llm/engine/src/llmconfig.hpp:94`）；
+             *  - `ujson::json::merge` 对**两侧都是 object** 的键是**递归深合并**
+             *    （`ujson.hpp:292-302`：`if (contains(key) && (*this)[key].is_object()
+             *    && it.value().is_object()) (*this)[key].merge(it.value());`）。
+             *
+             * 所以 `{"jinja":{"context":{"enable_thinking":false}}}` 会与模型自带的
+             * `jinja.chat_template` / `jinja.context` 合并，而**不是**替换掉 jinja。
+             * 下游链路也确认能到模板：`Llm::set_config` → `setChatTemplate()`
+             * → `Tokenizer::set_chat_template_context` → `apply_chat_template`
+             * 把 context 作为 `extra_context` 传进 jinja 渲染
+             * （`llm.cpp:139-142`、`llm.cpp:113-137`、`tokenizer.cpp:1018-1054`、
+             * `jinja.hpp:2234`），模板里的 `enable_thinking` 就是从这里取的。
+             *
+             * 真机上「只出 1 个 token」的**真正**根因是另一件事：曾经把整段
+             * `history` 数组传给原生 `ResponseWithHistory()` —— 那条路径
+             * **不套 chat template**，模型收到的是没有 `<|im_start|>` 包装的裸文本。
+             * 详见 [com.mnnkit.app.llm.MnnLlmEngine.stream] 里的长注释。
              */
             enableThinking: Boolean = false,
         ): String {

@@ -5,9 +5,12 @@ import com.mnnkit.core.json.JsonParser
 import com.mnnkit.core.json.stringify
 import com.mnnkit.core.net.Http
 import com.mnnkit.core.net.Sse
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.transform
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStreamWriter
@@ -116,6 +119,9 @@ class OpenAiCompatibleClient(private val http: Http) {
      *
      * 每收到一段增量就 emit 一次；`[DONE]` 或连接结束即完成。
      * 调用方负责取消 —— 取消会关闭底层连接。
+     *
+     * 发射的是 [ChatDelta]：**思考与正文分开**，调用方可以据此分别展示。
+     * 若只想要纯文本，用 [chatStreamText]。
      */
     fun chatStream(
         provider: ApiProvider,
@@ -125,7 +131,7 @@ class OpenAiCompatibleClient(private val http: Http) {
         maxTokens: Int = 512,
         systemPrompt: String? = null,
         thinking: ThinkingEffort = ThinkingEffort.DEFAULT,
-    ): Flow<String> = callbackFlow {
+    ): Flow<ChatDelta> = callbackFlow {
         val url = provider.endpoint("chat/completions")
         val body = buildChatBody(
             provider = provider,
@@ -152,75 +158,100 @@ class OpenAiCompatibleClient(private val http: Http) {
             setChunkedStreamingMode(0)
         }
 
+        // ⚠️⚠️ **整段网络读写必须跑在 IO 线程上** —— 这是「API 路径界面全白」
+        // 的真正根因。
+        //
+        // `callbackFlow` 的块**在收集端上下文中执行**（结构化并发，不自动切线程）。
+        // 调用点是 `AppRoot.generateJob = scope.launch { ... }`，而
+        // `rememberCoroutineScope()` 给的是 **AndroidUiDispatcher.Main** ——
+        // 于是 `conn.outputStream` 写请求体、`reader.readLine()` 读 SSE
+        // 全都在**主线程**上阻塞。
+        //
+        // 症状之所以难查：
+        //   * 请求已经发出、服务端也确实有响应（日志里有「生成开始：路径=API」）；
+        //   * 但主线程被阻塞，`messages` 的状态写入既推不动重组，
+        //     也永远轮不到执行 —— 界面**一个字都不显示**；
+        //   * 「没有任何 token 日志」不是因为没收到数据，而是因为
+        //     读取循环压根没跑（主线程正卡在写请求体那一步）。
+        //   * 对比：本地路径 `MnnLlmEngine.stream` 里显式写了
+        //     `withContext(Dispatchers.IO)`，所以**本地路径正常、只有 API 空白**。
+        //     这个不对称本身就是最有力的线索。
         try {
-            conn.outputStream.use { out ->
-                OutputStreamWriter(out, Charsets.UTF_8).use { it.write(body) }
-            }
-
-            val code = conn.responseCode
-            if (code !in 200..299) {
-                val err = runCatching {
-                    conn.errorStream?.bufferedReader()?.readText().orEmpty()
-                }.getOrDefault("")
-                android.util.Log.e(TAG, "HTTP $code 请求体=$body")
-                close(ApiException("HTTP $code：${extractErrorMessage(err)}"))
-                return@callbackFlow
-            }
-
-            // ── 响应诊断 ──
-            // 记住 HTTP 码与内容类型。零 token 且零异常时，这是唯一能区分
-            // 「服务端没发数据」「我们读错了」「流被提前关掉」的办法。
-            android.util.Log.i(
-                TAG,
-                "chatStream 已连接：HTTP $code" +
-                    " contentType=${conn.contentType}" +
-                    " contentLength=${conn.contentLength}" +
-                    " 请求体=$body",
-            )
-
-            val reader = conn.inputStream.bufferedReader(Charsets.UTF_8)
-            var lineCount = 0
-            var dataCount = 0
-            while (true) {
-                val line = reader.readLine() ?: break
-                lineCount++
-                // 前 5 行原始数据打出来，用于核对 SSE 分帧是否符合预期
-                if (lineCount <= 5) {
-                    android.util.Log.i(TAG, "chatStream 原始行#$lineCount: $line")
+            withContext(Dispatchers.IO) {
+                conn.outputStream.use { out ->
+                    OutputStreamWriter(out, Charsets.UTF_8).use { it.write(body) }
                 }
-                if (!line.startsWith("data:")) continue
-                dataCount++
-                val payload = line.removePrefix("data:").trim()
-                if (payload == "[DONE]") break
-                if (payload.isEmpty()) continue
 
-                val choice = runCatching {
-                    JsonParser.parseOrNull(payload)?.arr("choices")?.firstOrNull()
-                }.getOrNull() ?: continue
-
-                // ⚠️ 必须同时看 `reasoning_content`，不能只看 `content`。
-                //
-                // 推理模型（DeepSeek 的 deepseek-flash / deepseek-reasoner、
-                // QwQ、以及各家带思考的模型）会**先**在 `delta.reasoning_content`
-                // 里输出一段思考，之后才开始输出 `delta.content`。
-                //
-                // 之前只读 `content`，于是整个思考阶段被静默丢弃 ——
-                // 如果 max_tokens 偏小、思考没结束就把预算耗尽，
-                // 界面上会**一个字都没有**，看起来完全像「API 调用失败」。
-                val content = choice.str("delta", "content")
-                val reasoning = choice.str("delta", "reasoning_content")
-
-                if (!content.isNullOrEmpty()) {
-                    trySend(content)
-                } else if (!reasoning.isNullOrEmpty()) {
-                    trySend(reasoning)
+                val code = conn.responseCode
+                if (code !in 200..299) {
+                    val err = runCatching {
+                        conn.errorStream?.bufferedReader()?.readText().orEmpty()
+                    }.getOrDefault("")
+                    android.util.Log.e(TAG, "HTTP $code 请求体=$body")
+                    close(ApiException("HTTP $code：${extractErrorMessage(err)}"))
+                    return@withContext
                 }
+
+                // ── 响应诊断 ──
+                // 记住 HTTP 码与内容类型。零 token 且零异常时，这是唯一能区分
+                // 「服务端没发数据」「我们读错了」「流被提前关掉」的办法。
+                android.util.Log.i(
+                    TAG,
+                    "chatStream 已连接：HTTP $code" +
+                        " contentType=${conn.contentType}" +
+                        " contentLength=${conn.contentLength}" +
+                        " 请求体=$body",
+                )
+
+                val reader = conn.inputStream.bufferedReader(Charsets.UTF_8)
+                var lineCount = 0
+                var dataCount = 0
+                var tokenCount = 0
+                while (true) {
+                    val line = reader.readLine() ?: break
+                    lineCount++
+                    // 前 5 行原始数据打出来，用于核对 SSE 分帧是否符合预期
+                    if (lineCount <= 5) {
+                        android.util.Log.i(TAG, "chatStream 原始行#$lineCount: $line")
+                    }
+                    if (!line.startsWith("data:")) continue
+                    dataCount++
+                    val payload = line.removePrefix("data:").trim()
+                    if (payload == "[DONE]") break
+                    if (payload.isEmpty()) continue
+
+                    val choice = runCatching {
+                        JsonParser.parseOrNull(payload)?.arr("choices")?.firstOrNull()
+                    }.getOrNull() ?: continue
+
+                    // ⚠️ 必须同时看 `reasoning_content`，不能只看 `content`。
+                    //
+                    // 推理模型（DeepSeek 的 deepseek-flash / deepseek-reasoner、
+                    // QwQ、以及各家带思考的模型）会**先**在 `delta.reasoning_content`
+                    // 里输出一段思考，之后才开始输出 `delta.content`。
+                    //
+                    // 之前只读 `content`，于是整个思考阶段被静默丢弃 ——
+                    // 如果 max_tokens 偏小、思考没结束就把预算耗尽，
+                    // 界面上会**一个字都没有**，看起来完全像「API 调用失败」。
+                    //
+                    // 现在两条流**分开上报**（[ChatDelta]），由 UI 决定怎么展示：
+                    // 思考内容若混进正文，用户看到的回答里会夹一大段「让我想想…」。
+                    val content = choice.str("delta", "content")
+                    val reasoning = choice.str("delta", "reasoning_content")
+
+                    if (!reasoning.isNullOrEmpty()) {
+                        if (trySend(ChatDelta.Reasoning(reasoning)).isSuccess) tokenCount++
+                    }
+                    if (!content.isNullOrEmpty()) {
+                        if (trySend(ChatDelta.Content(content)).isSuccess) tokenCount++
+                    }
+                }
+                android.util.Log.i(
+                    TAG,
+                    "chatStream 结束：总行数=$lineCount data 行数=$dataCount 上报片段=$tokenCount",
+                )
+                close()
             }
-            android.util.Log.i(
-                TAG,
-                "chatStream 结束：总行数=$lineCount data 行数=$dataCount",
-            )
-            close()
         } catch (e: Exception) {
             close(ApiException("请求失败：${e.message}", e))
         } finally {
@@ -228,6 +259,47 @@ class OpenAiCompatibleClient(private val http: Http) {
         }
 
         awaitClose { runCatching { conn.disconnect() } }
+    }
+
+    /**
+     * 流式对话的一小段增量。
+     *
+     * 拆成两种是为了让「思考」和「正文」在界面上分得开 —— 推理模型的
+     * `reasoning_content` 和 `content` 是**两条独立的流**，混进同一个
+     * 累加器会让最终回答里夹进整段思考文字。
+     */
+    sealed interface ChatDelta {
+        /** 正文（`delta.content`）。 */
+        data class Content(val text: String) : ChatDelta
+
+        /** 思考过程（`delta.reasoning_content`）。推理模型专属，可能整轮都不出现。 */
+        data class Reasoning(val text: String) : ChatDelta
+    }
+
+    /**
+     * [chatStream] 的纯文本视图：**丢掉思考内容，只留正文**。
+     *
+     * 给「只关心最终回答」的调用方用（例如「测试连接」这类一次性展示）。
+     * 聊天界面请直接用 [chatStream]，才能把思考折叠展示。
+     */
+    fun chatStreamText(
+        provider: ApiProvider,
+        messages: List<Pair<String, String>>,
+        temperature: Double = 0.7,
+        topP: Double = 0.9,
+        maxTokens: Int = 512,
+        systemPrompt: String? = null,
+        thinking: ThinkingEffort = ThinkingEffort.DEFAULT,
+    ): Flow<String> = chatStream(
+        provider = provider,
+        messages = messages,
+        temperature = temperature,
+        topP = topP,
+        maxTokens = maxTokens,
+        systemPrompt = systemPrompt,
+        thinking = thinking,
+    ).transform { delta ->
+        if (delta is ChatDelta.Content) emit(delta.text)
     }
 
     /** 非流式对话（一次性拿完整回复）。用于「测试连接」。 */
