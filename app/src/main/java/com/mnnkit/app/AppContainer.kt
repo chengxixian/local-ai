@@ -19,6 +19,7 @@ import com.mnnkit.app.image.UnavailableDiffusionEngine
 import com.mnnkit.app.data.api.ApiProviders
 import com.mnnkit.app.llm.MnnLlmEngine
 import com.mnnkit.app.llm.UnavailableLlmEngine
+import com.mnnkit.core.chat.ConversationStore
 import com.mnnkit.core.chat.LlmEngine
 import com.mnnkit.core.image.DiffusionEngine
 import com.mnnkit.core.model.ModelKind
@@ -61,6 +62,15 @@ class AppContainer(context: Context) {
     val memoryStore = MemoryStore(appContext)
 
     val memoryManager = MemoryManager(memoryStore, settings)
+
+    /**
+     * 对话历史持久化。**这是「退出后上下文就没了」的修复所在。**
+     *
+     * 与 [memoryStore] 分工：
+     *  - [memoryStore]：长期记忆（SQLite FTS4），从对话里提炼，用于检索注入；
+     *  - [conversationStore]：原样的对话消息，用于重启后恢复界面与上下文。
+     */
+    val conversationStore = ConversationStore(storage.conversationFile)
 
     /**
      * Skill 库：内置索引 + GitHub 安装 + 启用状态。

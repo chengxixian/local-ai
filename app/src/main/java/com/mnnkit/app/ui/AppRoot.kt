@@ -1,6 +1,7 @@
 package com.mnnkit.app.ui
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -8,6 +9,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import com.mnnkit.app.data.api.OpenAiCompatibleClient
+import com.mnnkit.core.chat.ConversationStore
 import com.mnnkit.app.ui.screens.ModelPickerDialog
 import com.mnnkit.app.speech.SpeechRouter
 import com.mnnkit.app.speech.SpeechAudio
@@ -39,6 +41,7 @@ import com.mnnkit.core.model.ModelKind
 import com.mnnkit.core.model.ModelStatus
 import com.mnnkit.app.util.MediaExport
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import java.io.File
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -60,6 +63,77 @@ fun AppRoot(container: AppContainer, modifier: Modifier = Modifier) {
     var chatError by remember { mutableStateOf<String?>(null) }
     var memoryNotice by remember { mutableStateOf<String?>(null) }
     var generateJob by remember { mutableStateOf<Job?>(null) }
+
+    // ──────────────────────────── 对话历史持久化 ────────────────────────────
+    //
+    // 修的是「应用一退出上下文就没了」：消息原先只活在 remember 里，
+    // 进程结束即丢。现在落到 files/chat/conversation.json（见 [ConversationStore]）。
+    //
+    // ⚠️ 三个容易踩的点：
+    //  1. **不能"恢复完再挂保存"**。如果先 await 恢复、再 collect 保存，
+    //     那期间用户若已经发了消息，恢复完成后的赋值会把新消息冲掉。
+    //     这里用 restoring 标志解决：恢复时**把已有的新消息接在后面**。
+    //  2. **保存要防抖**。流式生成每个 token 都改 messages，逐次写盘会
+    //     在 IO 线程上写上百次文件。debounce 300ms + 只保留最新一次。
+    //  3. **别存残缺回复**。生成中途退出会留下空气泡，
+    //     ConversationStore.isPersistable 会把它过滤掉。
+    var lastConversationAt by remember { mutableStateOf(0L) }
+    var restoring by remember { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        val snap = withContext(Dispatchers.IO) { container.conversationStore.load() }
+        val restored = snap.messages.map { m ->
+            ChatMessageUi(
+                role = m.role,
+                text = m.text,
+                reasoning = m.reasoning,
+                imagePath = m.imagePath,
+                audioPath = m.audioPath,
+            )
+        }
+        if (restored.isNotEmpty()) {
+            // 用「已有的新消息 + 恢复的旧消息」而不是直接覆盖。
+            //
+            // ⚠️ 顺序不能反 —— 必须旧消息在前、新消息在后，否则时间线颠倒。
+            // （如果用户在恢复完成前就发了消息，那条新消息此时已经在 messages 里；
+            //   直接赋成 restored 会把它冲掉，赋成 messages + restored 又会颠倒顺序。）
+            messages = restored + messages
+            lastConversationAt = snap.updatedAt
+        }
+        snap.error?.let { chatError = "上次的对话历史读取失败：$it" }
+        restoring = false
+
+        // 让用户明确知道"历史被恢复了"，否则会以为消息是凭空冒出来的。
+        if (restored.isNotEmpty()) {
+            memoryNotice = "已恢复上次的对话（${restored.count { it.role == "user" }} 轮）"
+            delay(4000)
+            memoryNotice = null
+        }
+    }
+
+    LaunchedEffect(messages, restoring) {
+        // 恢复之前不保存，否则会把空列表写回去，把历史抹掉
+        if (restoring || messages.isEmpty()) return@LaunchedEffect
+        delay(300)
+        val toStore = messages.map { m ->
+            ConversationStore.StoredMessage(
+                role = m.role,
+                text = m.text,
+                reasoning = m.reasoning,
+                imagePath = m.imagePath,
+                audioPath = m.audioPath,
+            )
+        }
+        val ok = withContext(Dispatchers.IO) { container.conversationStore.save(toStore) }
+        if (!ok) {
+            // ConversationStore 刻意不抛异常（丢历史可以接受，但不能崩聊天），
+            // 所以失败只能在这里记一笔 —— 不然"历史存不上"会完全无声。
+            android.util.Log.w(
+                "LocalAI-Gen",
+                "对话历史写入失败（共 ${toStore.size} 条），本次退出后可能丢失",
+            )
+        }
+    }
 
     val modelState by container.modelManager.state.collectAsState()
     val skillState by container.skillManager.state.collectAsState()
@@ -522,6 +596,10 @@ fun AppRoot(container: AppContainer, modifier: Modifier = Modifier) {
                         scope.launch { container.llmEngine.resetContext() }
                         messages = emptyList()
                         memoryNotice = null
+                        lastConversationAt = 0L
+                        // 「新话题」必须把落盘的历史也清掉 ——
+                        // 否则重启后旧对话又会被恢复回来，用户会以为没清干净。
+                        scope.launch(Dispatchers.IO) { container.conversationStore.clear() }
                     },
                     onSpeak = { text ->
                         // 朗读：合成 → 播放 → 把音频路径写回该条消息，让「下载音频」出现。

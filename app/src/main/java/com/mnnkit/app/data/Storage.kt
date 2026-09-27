@@ -45,6 +45,18 @@ class Storage(context: Context) {
     /** 日志 */
     val logsDir: File by lazy { File(root, "logs").also { it.mkdirs() } }
 
+    /**
+     * 对话历史的存放位置：`root/chat/conversation.json`
+     *
+     * 放外部私有目录（与模型同级）而不是 SharedPreferences：
+     *  - 对话可能是几百 KB 的文本 + 图片路径，不适合塞进 SharedPreferences
+     *    （那边是 XML，全量重写，越大越慢）；
+     *  - 用户能用文件管理器直接看到/备份/删除；
+     *  - 卸载即清理，语义与「应用数据」一致。
+     */
+    val conversationFile: File
+        get() = File(File(root, "chat").also { it.mkdirs() }, "conversation.json")
+
     /** 某个模型应当安装到的目录。 */
     fun modelDir(kindId: String, modelId: String): File =
         File(File(modelsDir, kindId), sanitize(modelId)).also { it.mkdirs() }
