@@ -46,6 +46,7 @@ import com.mnnkit.app.ui.glass.GlassNavBarContent
 import com.mnnkit.app.ui.glass.LocalGlassBackdrop
 import com.mnnkit.app.ui.glass.glassNavBar
 import com.mnnkit.app.ui.glass.rememberGlassBackdrop
+import com.mnnkit.app.ui.screens.MnnCapsuleButton
 import com.mnnkit.app.ui.theme.MnnMotion
 import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -166,6 +167,18 @@ fun AppShell(
     tab: TopTab,
     onTabChange: (TopTab) -> Unit,
     /**
+     * 点顶栏右上角「新对话」。**只有对话页且已有消息时**才会显示这个按钮 ——
+     * 没有对话可清时露一个按钮出来，只会让人怀疑它到底干了什么。
+     *
+     * 真正的「清空 + 清磁盘」动作由调用方执行（它持有 messages 与
+     * ConversationStore）；这里只负责把按钮放在顶栏的 `trailing` 槽里。
+     */
+    onNewChat: () -> Unit = {},
+    /**
+     * 对话页是否已有消息（决定右上角「新对话」按钮显不显示）。
+     */
+    hasChat: Boolean = false,
+    /**
      * 浮在页面之上的**玻璃层**。它会被放在采集层**之外**，并拿到自己的采集源。
      *
      * ⚠️ 玻璃元素绝不能写在 [content] 里 —— `content` 是采集层的内容，
@@ -217,6 +230,45 @@ fun AppShell(
                         subtitle = subtitle,
                         modifier = Modifier.background(MiuixTheme.colorScheme.surfaceContainer),
                         color = Color.Transparent,
+                        // 右上角「新对话」。
+                        //
+                        // ⚠️ 这里**不能**用 miuix 的 `IconButton` / `Button`：
+                        // 它们的子内容颜色由主题的 on* 配色决定，而 miuix 的
+                        // `Colors` 由 ThemeController 内部构造、外部覆盖不了 ——
+                        // 真机上出现过「灰字配浅底」看不清（见 MnnButtons.kt 的长注释）。
+                        // 所以顶栏这个按钮也自己画，配色显式给定。
+                        // 右上角「新对话」。
+                        //
+                        // ⚠️ 槽位的**参数名是 `actions`**，不是 `trailing`。
+                        // miuix 的 `SmallTopAppBar` 完整签名（从 AAR 的
+                        // Kotlin metadata 里读出来的）是：
+                        //   title, modifier, color, titleColor, subtitle,
+                        //   subtitleColor, navigationIcon, actions, scrollBehavior,
+                        //   defaultWindowInsetsPadding, titlePadding,
+                        //   navigationIconPadding, actionIconPadding, bottomContent
+                        // 写成 `trailing = {...}` 不会报"没有这个参数"，而是被当成
+                        // 后面某个位置参数，于是 lambda 落到 `bottomContent` 那个
+                        // **非 @Composable** 的槽里，报：
+                        //   "@Composable invocations can only happen from the context
+                        //    of a @Composable function"
+                        // 这种"参数错位"型的错误信息完全不提参数名，很容易查错方向。
+                        //
+                        // ⚠️ 也**不能**用 miuix 的 `IconButton` / `Button`：它们的
+                        // 子内容颜色由主题 on* 配色决定，而 miuix 的 `Colors` 由
+                        // ThemeController 内部构造、外部覆盖不了 —— 真机上出现过
+                        // 「灰字配浅底」看不清（见 MnnButtons.kt 的长注释）。
+                        // 所以这个按钮也自己画，配色显式给定。
+                        actions = {
+                            if (tab == TopTab.Chat && hasChat) {
+                                MnnCapsuleButton(
+                                    text = "新对话",
+                                    onClick = {
+                                        android.util.Log.i("LocalAI-Gen", "顶栏「新对话」被点击")
+                                        onNewChat()
+                                    },
+                                )
+                            }
+                        },
                     )
                 },
             ) { padding ->
