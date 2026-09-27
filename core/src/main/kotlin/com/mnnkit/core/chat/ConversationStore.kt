@@ -4,6 +4,10 @@ import com.mnnkit.core.json.Json
 import com.mnnkit.core.json.JsonParser
 import com.mnnkit.core.json.stringify
 import java.io.File
+import java.io.FileOutputStream
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 /**
  * 对话历史的**持久化**。
@@ -49,6 +53,9 @@ import java.io.File
  * 4. **上限裁剪**。只保留最近 [MAX_MESSAGES] 条。
  */
 class ConversationStore(private val file: File) {
+    private val backup = File(file.parentFile, file.name + ".bak")
+    private val temporary = File(file.parentFile, file.name + ".tmp")
+    private val backupTemporary = File(file.parentFile, file.name + ".bak.tmp")
 
     /** 一条存下来的消息。字段与 UI 的 `ChatMessageUi` 对齐，但不依赖 UI 层。 */
     data class StoredMessage(
@@ -57,6 +64,7 @@ class ConversationStore(private val file: File) {
         val reasoning: String? = null,
         val imagePath: String? = null,
         val audioPath: String? = null,
+        val generationMetrics: GenerationMetrics? = null,
     ) {
         /**
          * 是否值得落盘。
@@ -74,6 +82,7 @@ class ConversationStore(private val file: File) {
         val messages: List<StoredMessage> = emptyList(),
         /** 文件里的 `updatedAt`，用于展示「上次对话时间」。 */
         val updatedAt: Long = 0L,
+        val conversationId: String? = null,
         /** 读取失败时的说明，供日志/界面提示；成功为 null。 */
         val error: String? = null,
     )
@@ -84,48 +93,71 @@ class ConversationStore(private val file: File) {
      * 解析失败时刻意**不删除**文件 —— 万一是我们格式升级改错了，
      * 用户的历史还在磁盘上，可以人工救回来。
      */
+    @Synchronized
     fun load(): Snapshot {
-        if (!file.isFile) return Snapshot()
-        val text = try {
-            file.readText()
+        val primary = readSnapshot(file)
+        if (primary != null && primary.error == null) return primary
+        val recovered = readSnapshot(backup)
+        if (recovered != null && recovered.error == null) return recovered
+        return primary ?: recovered ?: Snapshot()
+    }
+
+    private fun readSnapshot(source: File): Snapshot? {
+        if (!source.isFile) return null
+        return try {
+            val text = source.readText()
+            val root = JsonParser.parseOrNull(text)
+            if (root?.get("messages") !is Json.Arr) Snapshot(error = "历史文件缺少消息列表")
+            else decode(text)
         } catch (error: Exception) {
-            return Snapshot(error = "读取失败：${error.message ?: error::class.java.simpleName}")
+            Snapshot(error = "读取失败：${error.message ?: error::class.java.simpleName}")
         }
-        return decode(text)
     }
 
-    /**
-     * 写入历史。返回是否成功。
-     *
-     * 裁剪策略：从**尾部**保留最近 [MAX_MESSAGES] 条。不按 token 数裁剪，
-     * 因为这里的目的只是「重启后能把界面和上下文恢复回来」，
-     * 真正的上下文长度由每轮生成时的历史组装决定。
-     */
-    fun save(messages: List<StoredMessage>): Boolean = try {
+    /** Synchronized, durable temp write followed by replacement; never delete the old file first. */
+    @Synchronized
+    fun save(messages: List<StoredMessage>, conversationId: String? = null): Boolean = try {
         file.parentFile?.mkdirs()
-        // 先写临时文件再改名：避免写到一半被杀，留下半截 JSON 把历史毁掉
-        val tmp = File(file.parentFile, file.name + ".tmp")
-        tmp.writeText(encode(messages))
-        if (file.exists()) file.delete()
-        if (!tmp.renameTo(file)) {
-            // renameTo 在少数文件系统上会失败，退化成直接写
-            file.writeText(encode(messages))
-            tmp.delete()
+        writeSynced(temporary, encode(messages, conversationId))
+        // Preserve only a known-good previous snapshot, never overwrite a good backup with corruption.
+        if (readSnapshot(file)?.error == null && file.isFile) {
+            writeSynced(backupTemporary, file.readText())
+            replace(backupTemporary, backup)
         }
+        replace(temporary, file)
         true
     } catch (error: Exception) {
         false
+    } finally {
+        temporary.delete()
+        backupTemporary.delete()
     }
 
-    /** 清空历史（「新话题」用）。 */
+    private fun writeSynced(target: File, text: String) {
+        FileOutputStream(target).use { output ->
+            output.write(text.toByteArray(Charsets.UTF_8))
+            output.fd.sync()
+        }
+    }
+
+    private fun replace(source: File, target: File) {
+        try {
+            Files.move(source.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        } catch (_: AtomicMoveNotSupportedException) {
+            // A valid backup remains if non-atomic replacement is interrupted.
+            Files.move(source.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
+    }
+
+    /** Remove backups too, so a new chat cannot resurrect the previous conversation. */
+    @Synchronized
     fun clear(): Boolean = try {
-        file.delete()
-        File(file.parentFile, file.name + ".tmp").delete()
-        true
+        // Delete backups first. A failed clear should retain the primary, not revive an older one.
+        val extrasRemoved = listOf(backup, temporary, backupTemporary).map { !it.exists() || it.delete() }.all { it }
+        extrasRemoved && (!file.exists() || file.delete())
     } catch (error: Exception) {
         false
     }
-
     companion object {
         /** 存储格式版本。将来改结构时用它做迁移判断。 */
         const val VERSION = 1
@@ -143,7 +175,7 @@ class ConversationStore(private val file: File) {
          *
          * 抽成纯函数是为了能在单测里直接验证序列化正确性（不碰文件 IO）。
          */
-        fun encode(messages: List<StoredMessage>): String {
+        fun encode(messages: List<StoredMessage>, conversationId: String? = null): String {
             val kept = messages
                 .filter { it.isPersistable }
                 .takeLast(MAX_MESSAGES)
@@ -152,6 +184,7 @@ class ConversationStore(private val file: File) {
                 linkedMapOf(
                     "version" to Json.Num(VERSION.toDouble()),
                     "updatedAt" to Json.Num(System.currentTimeMillis().toDouble()),
+                    "conversationId" to Json.Str(conversationId ?: java.util.UUID.randomUUID().toString()),
                     "messages" to Json.Arr(
                         kept.map { m ->
                             val fields = linkedMapOf<String, Json>(
@@ -161,6 +194,13 @@ class ConversationStore(private val file: File) {
                             m.reasoning?.let { fields["reasoning"] = Json.Str(it) }
                             m.imagePath?.let { fields["imagePath"] = Json.Str(it) }
                             m.audioPath?.let { fields["audioPath"] = Json.Str(it) }
+                            m.generationMetrics?.let { metrics ->
+                                fields["generationMetrics"] = Json.Obj(mapOf(
+                                    "completionTokens" to Json.Num(metrics.completionTokens.toDouble()),
+                                    "durationSeconds" to Json.Num(metrics.durationSeconds),
+                                    "source" to Json.Str(metrics.source.name),
+                                ))
+                            }
                             Json.Obj(fields)
                         },
                     ),
@@ -175,6 +215,15 @@ class ConversationStore(private val file: File) {
          * **不抛异常**：任何解析问题都收成 [Snapshot.error]，
          * 让调用方能继续用一个空的对话界面。损坏的文件不删。
          */
+        private fun decodeMetrics(value: Json?): GenerationMetrics? {
+            val obj = value?.asObject ?: return null
+            val count = (obj["completionTokens"] as? Json.Num)?.toLongOrNull() ?: return null
+            val seconds = (obj["durationSeconds"] as? Json.Num)?.value ?: return null
+            val sourceName = (obj["source"] as? Json.Str)?.value ?: return null
+            val source = GenerationMetrics.Source.entries.firstOrNull { it.name == sourceName } ?: return null
+            return GenerationMetrics.create(count, seconds, source)
+        }
+
         fun decode(text: String): Snapshot {
             if (text.isBlank()) return Snapshot()
 
@@ -192,6 +241,7 @@ class ConversationStore(private val file: File) {
                     reasoning = obj["reasoning"]?.asString,
                     imagePath = obj["imagePath"]?.asString,
                     audioPath = obj["audioPath"]?.asString,
+                    generationMetrics = decodeMetrics(obj["generationMetrics"]),
                 )
                 // 顺便丢掉历史里已经残缺的条目，避免空气泡被反复恢复
                 msg.takeIf { it.isPersistable }
@@ -200,6 +250,7 @@ class ConversationStore(private val file: File) {
             return Snapshot(
                 messages = messages,
                 updatedAt = root["updatedAt"]?.asLong ?: 0L,
+                conversationId = root["conversationId"]?.asString,
             )
         }
     }

@@ -18,6 +18,13 @@ interface LlmEngine {
     var loadedModel: ModelItem?
 
     /**
+     * Metrics for the most recently completed generation, or null when unavailable.
+     * Implementations reset this at stream start and publish before normal flow completion.
+     * Consumers must capture it immediately after collect, before another engine operation.
+     */
+    val lastGenerationMetrics: GenerationMetrics? get() = null
+
+    /**
      * 加载模型。[model] 必须指向本地已就绪的模型目录。
      * 会释放先前加载的模型。
      */

@@ -1,6 +1,11 @@
 package com.mnnkit.app.data.api
 
+import com.mnnkit.core.chat.GenerationMetrics
 import com.mnnkit.core.json.Json
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicReference
 import com.mnnkit.core.json.JsonParser
 import com.mnnkit.core.json.stringify
 import com.mnnkit.core.net.Http
@@ -132,135 +137,108 @@ class OpenAiCompatibleClient(private val http: Http) {
         systemPrompt: String? = null,
         thinking: ThinkingEffort = ThinkingEffort.DEFAULT,
     ): Flow<ChatDelta> = callbackFlow {
-        val url = provider.endpoint("chat/completions")
-        val body = buildChatBody(
-            provider = provider,
-            messages = messages,
-            temperature = temperature,
-            topP = topP,
-            maxTokens = maxTokens,
-            systemPrompt = systemPrompt,
-            stream = true,
-            thinking = thinking,
-        )
-
-        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 15_000
-            // 流式响应不能短超时：模型可能在思考期间几十秒不吐字
-            readTimeout = 120_000
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Accept", "text/event-stream")
-            // 必须 identity：gzip 会缓冲，破坏逐字上屏
-            setRequestProperty("Accept-Encoding", "identity")
-            setRequestProperty("Authorization", "Bearer ${provider.apiKey}")
-            setChunkedStreamingMode(0)
-        }
-
-        // ⚠️⚠️ **整段网络读写必须跑在 IO 线程上** —— 这是「API 路径界面全白」
-        // 的真正根因。
-        //
-        // `callbackFlow` 的块**在收集端上下文中执行**（结构化并发，不自动切线程）。
-        // 调用点是 `AppRoot.generateJob = scope.launch { ... }`，而
-        // `rememberCoroutineScope()` 给的是 **AndroidUiDispatcher.Main** ——
-        // 于是 `conn.outputStream` 写请求体、`reader.readLine()` 读 SSE
-        // 全都在**主线程**上阻塞。
-        //
-        // 症状之所以难查：
-        //   * 请求已经发出、服务端也确实有响应（日志里有「生成开始：路径=API」）；
-        //   * 但主线程被阻塞，`messages` 的状态写入既推不动重组，
-        //     也永远轮不到执行 —— 界面**一个字都不显示**；
-        //   * 「没有任何 token 日志」不是因为没收到数据，而是因为
-        //     读取循环压根没跑（主线程正卡在写请求体那一步）。
-        //   * 对比：本地路径 `MnnLlmEngine.stream` 里显式写了
-        //     `withContext(Dispatchers.IO)`，所以**本地路径正常、只有 API 空白**。
-        //     这个不对称本身就是最有力的线索。
-        try {
-            withContext(Dispatchers.IO) {
-                conn.outputStream.use { out ->
-                    OutputStreamWriter(out, Charsets.UTF_8).use { it.write(body) }
-                }
-
-                val code = conn.responseCode
-                if (code !in 200..299) {
-                    val err = runCatching {
-                        conn.errorStream?.bufferedReader()?.readText().orEmpty()
-                    }.getOrDefault("")
-                    android.util.Log.e(TAG, "HTTP $code 请求体=$body")
-                    close(ApiException("HTTP $code：${extractErrorMessage(err)}"))
-                    return@withContext
-                }
-
-                // ── 响应诊断 ──
-                // 记住 HTTP 码与内容类型。零 token 且零异常时，这是唯一能区分
-                // 「服务端没发数据」「我们读错了」「流被提前关掉」的办法。
-                android.util.Log.i(
-                    TAG,
-                    "chatStream 已连接：HTTP $code" +
-                        " contentType=${conn.contentType}" +
-                        " contentLength=${conn.contentLength}" +
-                        " 请求体=$body",
-                )
-
-                val reader = conn.inputStream.bufferedReader(Charsets.UTF_8)
-                var lineCount = 0
-                var dataCount = 0
-                var tokenCount = 0
+        val connection = AtomicReference<HttpURLConnection?>(null)
+        val worker = launch(Dispatchers.IO) {
+            try {
+                var includeUsage = true
                 while (true) {
-                    val line = reader.readLine() ?: break
-                    lineCount++
-                    // 前 5 行原始数据打出来，用于核对 SSE 分帧是否符合预期
-                    if (lineCount <= 5) {
-                        android.util.Log.i(TAG, "chatStream 原始行#$lineCount: $line")
+                    ensureActive()
+                    val body = buildChatBody(
+                        provider, messages, temperature, topP, maxTokens, systemPrompt,
+                        stream = true, thinking = thinking, includeUsage = includeUsage,
+                    )
+                    val conn = (URL(provider.endpoint("chat/completions")).openConnection() as HttpURLConnection).apply {
+                        requestMethod = "POST"
+                        connectTimeout = 15_000
+                        readTimeout = 120_000
+                        doOutput = true
+                        setRequestProperty("Content-Type", "application/json")
+                        setRequestProperty("Accept", "text/event-stream")
+                        setRequestProperty("Accept-Encoding", "identity")
+                        if (provider.apiKey.isNotBlank()) setRequestProperty("Authorization", "Bearer ${provider.apiKey}")
+                        setChunkedStreamingMode(0)
                     }
-                    if (!line.startsWith("data:")) continue
-                    dataCount++
-                    val payload = line.removePrefix("data:").trim()
-                    if (payload == "[DONE]") break
-                    if (payload.isEmpty()) continue
+                    connection.set(conn)
+                    try {
+                        ensureActive()
+                        val startedNanos = System.nanoTime()
+                        conn.outputStream.use { out ->
+                            OutputStreamWriter(out, Charsets.UTF_8).use { it.write(body) }
+                        }
+                        val code = conn.responseCode
+                        if (code !in 200..299) {
+                            val err = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+                            // Retry only an explicit rejected optional field, before any output.
+                            // Never replay a successful/partially streamed generation.
+                            val rejectsUsage = (err.contains("stream_options", ignoreCase = true) ||
+                                err.contains("include_usage", ignoreCase = true)) &&
+                                listOf("unsupported", "not supported", "unknown", "unrecognized", "not allowed", "extra", "unexpected").any {
+                                    err.contains(it, ignoreCase = true)
+                                }
+                            if (includeUsage && code in listOf(400, 422) && rejectsUsage) {
+                                includeUsage = false
+                                continue
+                            }
+                            throw ApiException("HTTP $code：${extractErrorMessage(err)}")
+                        }
 
-                    val choice = runCatching {
-                        JsonParser.parseOrNull(payload)?.arr("choices")?.firstOrNull()
-                    }.getOrNull() ?: continue
-
-                    // ⚠️ 必须同时看 `reasoning_content`，不能只看 `content`。
-                    //
-                    // 推理模型（DeepSeek 的 deepseek-flash / deepseek-reasoner、
-                    // QwQ、以及各家带思考的模型）会**先**在 `delta.reasoning_content`
-                    // 里输出一段思考，之后才开始输出 `delta.content`。
-                    //
-                    // 之前只读 `content`，于是整个思考阶段被静默丢弃 ——
-                    // 如果 max_tokens 偏小、思考没结束就把预算耗尽，
-                    // 界面上会**一个字都没有**，看起来完全像「API 调用失败」。
-                    //
-                    // 现在两条流**分开上报**（[ChatDelta]），由 UI 决定怎么展示：
-                    // 思考内容若混进正文，用户看到的回答里会夹一大段「让我想想…」。
-                    val content = choice.str("delta", "content")
-                    val reasoning = choice.str("delta", "reasoning_content")
-
-                    if (!reasoning.isNullOrEmpty()) {
-                        if (trySend(ChatDelta.Reasoning(reasoning)).isSuccess) tokenCount++
-                    }
-                    if (!content.isNullOrEmpty()) {
-                        if (trySend(ChatDelta.Content(content)).isSuccess) tokenCount++
+                        var completionTokens: Long? = null
+                        var finished = false
+                        conn.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                            while (true) {
+                                ensureActive()
+                                val line = reader.readLine() ?: break
+                                if (!line.startsWith("data:")) continue
+                                val payload = line.removePrefix("data:").trim()
+                                if (payload == "[DONE]") {
+                                    finished = true
+                                    break
+                                }
+                                val json = JsonParser.parseOrNull(payload) ?: continue
+                                if (json["error"] != null && json["error"] != Json.Null) {
+                                    throw ApiException(extractErrorMessage(payload))
+                                }
+                                // Final usage often has choices: []; parse it BEFORE choices.
+                                val usage = json["usage"]?.get("completion_tokens") as? Json.Num
+                                if (usage != null) {
+                                    completionTokens = usage.toLongOrNull()?.takeIf {
+                                        it in 0..GenerationMetrics.MAX_EXACT_TOKENS
+                                    }
+                                }
+                                val choice = json.arr("choices")?.firstOrNull() ?: continue
+                                if (choice["finish_reason"] is Json.Str) finished = true
+                                choice.str("delta", "reasoning_content")?.takeIf { it.isNotEmpty() }?.let {
+                                    send(ChatDelta.Reasoning(it))
+                                }
+                                choice.str("delta", "content")?.takeIf { it.isNotEmpty() }?.let {
+                                    send(ChatDelta.Content(it))
+                                }
+                            }
+                        }
+                        // Client-observed end-to-end rate, not the provider's decode speed.
+                        if (finished) {
+                            completionTokens?.let {
+                                GenerationMetrics.fromApiUsage(it, System.nanoTime() - startedNanos)
+                            }?.let { send(ChatDelta.Metrics(it)) }
+                        }
+                        close()
+                        break
+                    } finally {
+                        connection.compareAndSet(conn, null)
+                        runCatching { conn.disconnect() }
                     }
                 }
-                android.util.Log.i(
-                    TAG,
-                    "chatStream 结束：总行数=$lineCount data 行数=$dataCount 上报片段=$tokenCount",
-                )
-                close()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                close(if (e is ApiException) e else ApiException("请求失败：${e.message}", e))
             }
-        } catch (e: Exception) {
-            close(ApiException("请求失败：${e.message}", e))
-        } finally {
-            runCatching { conn.disconnect() }
         }
-
-        awaitClose { runCatching { conn.disconnect() } }
+        awaitClose {
+            worker.cancel()
+            runCatching { connection.getAndSet(null)?.disconnect() }
+        }
     }
-
     /**
      * 流式对话的一小段增量。
      *
@@ -274,6 +252,9 @@ class OpenAiCompatibleClient(private val http: Http) {
 
         /** 思考过程（`delta.reasoning_content`）。推理模型专属，可能整轮都不出现。 */
         data class Reasoning(val text: String) : ChatDelta
+
+        /** Final measured usage; never synthesized from text/chunk counts. */
+        data class Metrics(val metrics: GenerationMetrics) : ChatDelta
     }
 
     /**
@@ -533,6 +514,7 @@ class OpenAiCompatibleClient(private val http: Http) {
         systemPrompt: String?,
         stream: Boolean,
         thinking: ThinkingEffort = ThinkingEffort.DEFAULT,
+        includeUsage: Boolean = true,
     ): String {
         val msgs = mutableListOf<Json>()
         if (!systemPrompt.isNullOrBlank()) {
@@ -554,6 +536,10 @@ class OpenAiCompatibleClient(private val http: Http) {
             "max_tokens" to Json.Num(maxTokens.toDouble()),
             "stream" to Json.Bool(stream),
         )
+
+        if (stream && includeUsage) {
+            fields["stream_options"] = Json.Obj(mapOf("include_usage" to Json.Bool(true)))
+        }
 
         // 思考开关。按官方文档传 `thinking` 对象；AUTO 时不发这个字段。
         thinking.id?.let { effort ->

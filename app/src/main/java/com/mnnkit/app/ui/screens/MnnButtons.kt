@@ -11,8 +11,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.dp
 import com.mnnkit.app.ui.theme.MnnTextColor
+import com.mnnkit.core.ui.MnnContrast
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
@@ -50,29 +52,29 @@ fun MnnCapsuleButton(
     emphasized: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
-    val bg = if (emphasized) {
-        MiuixTheme.colorScheme.primary
-    } else {
-        MiuixTheme.colorScheme.surfaceContainerHigh
-    }
+    val scheme = MiuixTheme.colorScheme
+    val rawBg = if (emphasized) scheme.primary else scheme.surfaceContainerHigh
 
-    // 文字颜色**显式**跟背景求对比，不依赖任何主题的 on* 配色。
+    // 文字颜色**显式**按背景算，不依赖任何主题的 on* 配色。
     //
-    // 对比度按相对亮度算，选黑或白里更清楚的那个（阈值 0.5 是常用近似）。
-    // 这样即使主色被动态取色改成很浅或很深的颜色，文字也不会看不清。
-    val onBg = if (bg.luminance() > 0.5f) Color(0xFF1A1C20) else Color(0xFFF7F8FA)
+    // ⚠️ 用 MnnContrast.safePairFor 而不是自己写"亮度阈值二选一"：
+    // 中亮度背景（相对亮度约 0.175~0.183 那一段）上黑字白字**都**到不了
+    // 4.5:1 —— 这是 WCAG 的物理下限。safePairFor 会把底色微调到安全区，
+    // 保证任何主题色（含 Monet 跟随壁纸）下文字都读得清。
+    // 有单测护栏：MnnContrastTest.every background becomes readable after safePairFor
+    val (safeArgb, onArgb) = MnnContrast.safePairFor(rawBg.toArgb())
 
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(50))
-            .background(bg)
+            .background(Color(safeArgb))
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text,
-            color = onBg,
+            color = Color(onArgb),
             style = MiuixTheme.textStyles.footnote1,
         )
     }
@@ -84,6 +86,3 @@ fun MnnCapsuleButton(
  */
 @Composable
 internal fun secondaryTextColor(): Color = MnnTextColor.secondary
-
-private fun Color.luminance(): Float =
-    0.2126f * red + 0.7152f * green + 0.0722f * blue

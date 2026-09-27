@@ -160,24 +160,28 @@ fun VoiceScreen(
                             MiuixTheme.colorScheme.onSurfaceVariantSummary
                         },
                     )
-                    Button(
+                    MnnButton(
+
                         onClick = if (recording) onStopRecording else onStartRecording,
                         enabled = sttReady,
-                        colors = if (!recording) {
-                            ButtonDefaults.buttonColorsPrimary()
-                        } else {
-                            ButtonDefaults.buttonColors()
+                        style = MnnButtonStyle.Tonal,
+                        content = {
+                            Text(if (recording) "停止录音" else "开始录音")
                         },
-                    ) { Text(if (recording) "停止录音" else "开始录音") }
+                    )
                     if (transcript.isNotBlank()) {
                         MnnInfoRow(
                             icon = Icons.Rounded.GraphicEq,
                             label = "识别结果",
                             value = transcript,
                         )
-                        Button(onClick = { onSpeak(transcript) }, enabled = ttsReady) {
-                            Text("朗读这段文字")
-                        }
+                        MnnButton(
+                            onClick = { onSpeak(transcript) }, enabled = ttsReady,
+                            style = MnnButtonStyle.Primary,
+                            content = {
+                                Text("朗读这段文字")
+                            },
+                        )
                     }
                 }
             }
@@ -202,11 +206,15 @@ fun VoiceScreen(
                         label = "输入要朗读的文字…",
                         useLabelAsPlaceholder = true,
                     )
-                    Button(
+                    MnnButton(
+
                         onClick = { onSpeak(readState.text.toString()) },
                         enabled = ttsReady && readState.text.isNotBlank(),
-                        colors = ButtonDefaults.buttonColorsPrimary(),
-                    ) { Text("朗读") }
+                        style = MnnButtonStyle.Primary,
+                        content = {
+                            Text("朗读")
+                        },
+                    )
                 }
             }
         }
@@ -237,7 +245,13 @@ private fun VoiceModelCard(item: ModelItem, modelManager: ModelManager) {
             trailing = {
                 when (dl?.status ?: item.status) {
                     ModelStatus.INSTALLING ->
-                        Button(onClick = { modelManager.cancel(item.id) }) { Text("取消") }
+                        MnnButton(
+                            onClick = { modelManager.cancel(item.id) },
+                            style = MnnButtonStyle.Primary,
+                            content = {
+                                Text("取消")
+                            },
+                        )
 
                     ModelStatus.READY -> Text(
                         "已安装",
@@ -245,10 +259,14 @@ private fun VoiceModelCard(item: ModelItem, modelManager: ModelManager) {
                         color = MiuixTheme.colorScheme.primary,
                     )
 
-                    else -> Button(
+                    else -> MnnButton(
+
                         onClick = { modelManager.install(item) },
-                        colors = ButtonDefaults.buttonColorsPrimary(),
-                    ) { Text("下载") }
+                        style = MnnButtonStyle.Primary,
+                        content = {
+                            Text("下载")
+                        },
+                    )
                 }
             },
         )
@@ -433,7 +451,8 @@ fun SettingsScreen(
                         label = "最大生成长度",
                         value = "${settings.maxNewTokens} tokens",
                     )
-                    Button(
+                    MnnButton(
+
                         onClick = {
                             // 在 256 / 512 / 1024 / 2048 之间循环
                             val next = when {
@@ -444,7 +463,11 @@ fun SettingsScreen(
                             }
                             onSettingsChange { it.copy(maxNewTokens = next) }
                         },
-                    ) { Text("切换") }
+                        style = MnnButtonStyle.Primary,
+                        content = {
+                            Text("切换")
+                        },
+                    )
                 }
             }
         }
@@ -632,16 +655,32 @@ fun MemoryScreen(
                         }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(MnnSpacing.inline)) {
-                        Button(
+                        MnnButton(
+
                             onClick = {
                                 onAdd(addState.text.toString(), kind)
                                 addState.clearText()
                             },
                             enabled = addState.text.isNotBlank(),
-                            colors = ButtonDefaults.buttonColorsPrimary(),
-                        ) { Text("记住") }
-                        Button(onClick = onExport) { Text("导出") }
-                        Button(onClick = onClearAll) { Text("清空全部") }
+                            style = MnnButtonStyle.Primary,
+                            content = {
+                                Text("记住")
+                            },
+                        )
+                        MnnButton(
+                            onClick = onExport,
+                            style = MnnButtonStyle.Primary,
+                            content = {
+                                Text("导出")
+                            },
+                        )
+                        MnnButton(
+                            onClick = onClearAll,
+                            style = MnnButtonStyle.Primary,
+                            content = {
+                                Text("清空全部")
+                            },
+                        )
                     }
                     exportedPath?.let {
                         Text(
@@ -678,7 +717,13 @@ fun MemoryScreen(
                         style = MiuixTheme.textStyles.footnote1,
                         color = MiuixTheme.colorScheme.primary,
                     )
-                    Button(onClick = { onDelete(entry.id) }) { Text("删除") }
+                    MnnButton(
+                        onClick = { onDelete(entry.id) },
+                        style = MnnButtonStyle.Primary,
+                        content = {
+                            Text("删除")
+                        },
+                    )
                 }
                 Text(entry.content, style = MiuixTheme.textStyles.body2)
                 Text(

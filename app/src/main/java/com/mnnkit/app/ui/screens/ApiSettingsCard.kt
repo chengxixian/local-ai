@@ -36,8 +36,6 @@ import com.mnnkit.app.ui.MnnStatusBanner
 import com.mnnkit.app.ui.theme.MnnRadii
 import com.mnnkit.app.ui.theme.MnnSpacing
 import com.mnnkit.app.ui.theme.MnnTextColor
-import top.yukonga.miuix.kmp.basic.Button
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.TextField
@@ -133,17 +131,20 @@ fun ApiSettingsCard(
                     showDivider = i != providers.providers.lastIndex,
                     trailing = {
                         Row(horizontalArrangement = Arrangement.spacedBy(MnnSpacing.tight)) {
-                            Button(onClick = { editingId = if (editingId == p.id) null else p.id }) {
-                                Text(if (editingId == p.id) "收起" else "编辑")
-                            }
-                            Button(
-                                onClick = { onSetActive(if (active) null else p.id) },
-                                colors = if (active) {
-                                    ButtonDefaults.buttonColors()
-                                } else {
-                                    ButtonDefaults.buttonColorsPrimary()
+                            MnnButton(
+                                onClick = { editingId = if (editingId == p.id) null else p.id },
+                                style = MnnButtonStyle.Primary,
+                                content = {
+                                    Text(if (editingId == p.id) "收起" else "编辑")
                                 },
-                            ) { Text(if (active) "取消启用" else "启用") }
+                            )
+                            MnnButton(
+                                onClick = { onSetActive(if (active) null else p.id) },
+                                style = MnnButtonStyle.Tonal,
+                                content = {
+                                    Text(if (active) "取消启用" else "启用")
+                                },
+                            )
                         }
                     },
                 )
@@ -171,12 +172,22 @@ fun ApiSettingsCard(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(MnnSpacing.inline),
         ) {
-            Button(onClick = onAdd, modifier = Modifier.weight(1f)) {
-                Icon(Icons.Rounded.Add, contentDescription = null)
-                Text(" 添加提供商")
-            }
+            MnnButton(
+                onClick = onAdd, modifier = Modifier.weight(1f),
+                style = MnnButtonStyle.Primary,
+                content = {
+                    Icon(Icons.Rounded.Add, contentDescription = null)
+                    Text(" 添加提供商")
+                },
+            )
             if (providers.providers.isNotEmpty()) {
-                Button(onClick = onClearAll) { Text("全部清除") }
+                MnnButton(
+                    onClick = onClearAll,
+                    style = MnnButtonStyle.Primary,
+                    content = {
+                        Text("全部清除")
+                    },
+                )
             }
         }
 
@@ -252,16 +263,23 @@ private fun ProviderEditor(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(MnnSpacing.inline),
         ) {
-            Button(
+            MnnButton(
                 onClick = onTest,
                 enabled = !testing,
-                colors = ButtonDefaults.buttonColorsPrimary(),
                 modifier = Modifier.weight(1f),
-            ) { Text(if (testing) "测试中…" else "测试连接") }
-            Button(onClick = onDelete) {
-                Icon(Icons.Rounded.Delete, contentDescription = null)
-                Text(" 删除")
-            }
+                style = MnnButtonStyle.Primary,
+                content = {
+                    Text(if (testing) "测试中…" else "测试连接")
+                },
+            )
+            MnnButton(
+                onClick = onDelete,
+                style = MnnButtonStyle.Primary,
+                content = {
+                    Icon(Icons.Rounded.Delete, contentDescription = null)
+                    Text(" 删除")
+                },
+            )
         }
 
         testResult?.let {

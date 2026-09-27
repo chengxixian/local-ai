@@ -37,8 +37,6 @@ import com.mnnkit.app.ui.MnnListItem
 import com.mnnkit.app.ui.MnnStatusBanner
 import com.mnnkit.app.ui.staggeredEntry
 import com.mnnkit.app.ui.theme.MnnSpacing
-import top.yukonga.miuix.kmp.basic.Button
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -123,17 +121,24 @@ fun McpScreen(
                             useLabelAsPlaceholder = true,
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(MnnSpacing.inline)) {
-                            Button(
+                            MnnButton(
                                 onClick = {
                                     mcpManager.importFromJson(jsonState.text.toString())
                                     jsonState.clearText()
                                 },
                                 enabled = jsonState.text.isNotBlank(),
-                                colors = ButtonDefaults.buttonColorsPrimary(),
-                            ) { Text("导入") }
-                            Button(onClick = { jsonState.setTextAndPlaceCursorAtEnd(mcpManager.sampleConfig()) }) {
-                                Text("填入示例")
-                            }
+                                style = MnnButtonStyle.Primary,
+                                content = {
+                                    Text("导入")
+                                },
+                            )
+                            MnnButton(
+                                onClick = { jsonState.setTextAndPlaceCursorAtEnd(mcpManager.sampleConfig()) },
+                                style = MnnButtonStyle.Primary,
+                                content = {
+                                    Text("填入示例")
+                                },
+                            )
                         }
                         Text(
                             "Android 只支持 HTTP 传输。stdio 型配置（command/args）会被识别但无法运行 —— " +
@@ -198,7 +203,7 @@ fun McpScreen(
                             subtitle = tool.description.ifBlank { "（没有描述）" },
                             leading = Icons.Rounded.Build,
                             trailing = {
-                                Button(
+                                MnnButton(
                                     onClick = {
                                         mcpManager.callTool(
                                             server = server.config.name,
@@ -207,8 +212,11 @@ fun McpScreen(
                                         )
                                     },
                                     enabled = state.busyName == null,
-                                    colors = ButtonDefaults.buttonColorsPrimary(),
-                                ) { Text("调用") }
+                                    style = MnnButtonStyle.Primary,
+                                    content = {
+                                        Text("调用")
+                                    },
+                                )
                             },
                         )
                         tool.inputSchema?.let { schema ->
@@ -308,18 +316,37 @@ private fun ServerCard(
 
         Row(horizontalArrangement = Arrangement.spacedBy(MnnSpacing.inline)) {
             if (server.connected) {
-                Button(onClick = { mcpManager.disconnect(cfg.name) }) { Text("断开") }
+                MnnButton(
+                    onClick = { mcpManager.disconnect(cfg.name) },
+                    style = MnnButtonStyle.Primary,
+                    content = {
+                        Text("断开")
+                    },
+                )
             } else {
-                Button(
+                MnnButton(
                     onClick = { mcpManager.connect(cfg.name) },
                     enabled = !busy && problem == null,
-                    colors = ButtonDefaults.buttonColorsPrimary(),
-                ) { Text(if (busy) "连接中…" else "连接") }
+                    style = MnnButtonStyle.Primary,
+                    content = {
+                        Text(if (busy) "连接中…" else "连接")
+                    },
+                )
             }
-            Button(
+            MnnButton(
                 onClick = { mcpManager.setEnabled(cfg.name, !cfg.enabled) },
-            ) { Text(if (cfg.enabled) "停用" else "启用") }
-            Button(onClick = { mcpManager.remove(cfg.name) }) { Text("删除") }
+                style = MnnButtonStyle.Primary,
+                content = {
+                    Text(if (cfg.enabled) "停用" else "启用")
+                },
+            )
+            MnnButton(
+                onClick = { mcpManager.remove(cfg.name) },
+                style = MnnButtonStyle.Primary,
+                content = {
+                    Text("删除")
+                },
+            )
         }
     }
 }

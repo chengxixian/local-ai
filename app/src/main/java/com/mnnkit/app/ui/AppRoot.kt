@@ -49,13 +49,19 @@ import com.mnnkit.app.ui.theme.MnnAccentColor
 import com.mnnkit.app.ui.theme.MnnTheme
 import com.mnnkit.core.chat.ChatMessage
 import com.mnnkit.core.chat.GenerationConfig
+import com.mnnkit.core.chat.GenerationMetrics
 import com.mnnkit.core.model.ModelKind
 import com.mnnkit.core.model.ModelStatus
 import com.mnnkit.app.util.MediaExport
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import java.io.File
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -75,6 +81,11 @@ fun AppRoot(container: AppContainer, modifier: Modifier = Modifier) {
     var chatError by remember { mutableStateOf<String?>(null) }
     var memoryNotice by remember { mutableStateOf<String?>(null) }
     var generateJob by remember { mutableStateOf<Job?>(null) }
+    var generationId by remember { mutableStateOf(0L) }
+    var conversationEpoch by remember { mutableStateOf(0L) }
+    var resetting by remember { mutableStateOf(false) }
+    var resetJob by remember { mutableStateOf<Job?>(null) }
+    val conversationIo = remember { Mutex() }
 
     // ──────────────────────────── 对话历史持久化 ────────────────────────────
     //
@@ -90,87 +101,129 @@ fun AppRoot(container: AppContainer, modifier: Modifier = Modifier) {
     //  3. **别存残缺回复**。生成中途退出会留下空气泡，
     //     ConversationStore.isPersistable 会把它过滤掉。
     var lastConversationAt by remember { mutableStateOf(0L) }
+    var activeConversationId by remember { mutableStateOf(java.util.UUID.randomUUID().toString() + ".json") }
     var restoring by remember { mutableStateOf(true) }
 
-    /** 顶栏「新对话」是否已经点了、正在等用户确认。 */
     var confirmNewChat by remember { mutableStateOf(false) }
+    var showConversationHistory by remember { mutableStateOf(false) }
+    var conversationHistory by remember { mutableStateOf(emptyList<com.mnnkit.core.chat.ConversationArchiveStore.Entry>()) }
 
-    /**
-     * 开始新对话：清空界面上下文 **并清掉落盘的历史**。
-     *
-     * 只 `messages = emptyList()` 是不够的 —— 那样重启后
-     * [ConversationStore] 又会把旧对话恢复回来，用户会以为没清干净。
-     *
-     * 调用点：顶栏右上角「新对话」按钮（经确认弹窗）。
-     */
-    fun startNewChat() {
-        generateJob?.cancel()
-        generateJob = null
-        generating = false
-        messages = emptyList()
-        chatError = null
-        memoryNotice = null
-        lastConversationAt = 0L
-        scope.launch { container.llmEngine.resetContext() }
-        // 清磁盘放 IO：删文件虽然快，但没必要占主线程
-        scope.launch(Dispatchers.IO) { container.conversationStore.clear() }
+    fun storedMessages(items: List<ChatMessageUi>) = items.map { m ->
+        ConversationStore.StoredMessage(m.role, m.text, m.reasoning, m.imagePath, m.audioPath, m.generationMetrics)
+    }
+    fun displayMessages(items: List<ConversationStore.StoredMessage>) = items.map { m ->
+        ChatMessageUi(role = m.role, text = m.text, reasoning = m.reasoning, imagePath = m.imagePath, audioPath = m.audioPath, generationMetrics = m.generationMetrics)
+    }
+
+    /** Archive the current turn before changing the active snapshot. Never discard it on I/O failure. */
+    fun changeConversation(targetId: String? = null) {
+        if (restoring || resetting) return
+        if (targetId != null && targetId == activeConversationId) {
+            showConversationHistory = false
+            return
+        }
+        val previous = generateJob
+        val previousReset = resetJob
+        generationId++
+        previous?.cancel()
+        resetting = true
+        resetJob = scope.launch {
+            try {
+                previousReset?.join()
+                previous?.cancelAndJoin()
+                generateJob = null
+                generating = false
+                val current = storedMessages(messages).filter { it.isPersistable }
+                val restored = conversationIo.withLock {
+                    withContext(Dispatchers.IO) {
+                        val target = targetId?.let { container.conversationArchiveStore.load(it)
+                            ?: error("找不到这条历史对话") }
+                        if (current.isNotEmpty()) {
+                            check(container.conversationArchiveStore.archive(current, activeConversationId) != null) { "对话归档失败；原对话仍保留" }
+                        }
+                        val ok = if (target == null) container.conversationStore.clear()
+                            else container.conversationStore.save(target.messages, targetId)
+                        check(ok) { "写入当前对话失败；原对话仍保留" }
+                        // Keep the reopened conversation in history: opening is not a one-time restore.
+                        target
+                    }
+                }
+                conversationEpoch++
+                messages = displayMessages(restored?.messages.orEmpty())
+                activeConversationId = targetId ?: java.util.UUID.randomUUID().toString() + ".json"
+                lastConversationAt = restored?.updatedAt ?: 0L
+                chatError = null
+                memoryNotice = null
+                generateJob = null
+                generating = false
+                showConversationHistory = false
+                container.llmEngine.resetContext()
+                conversationHistory = withContext(Dispatchers.IO) { container.conversationArchiveStore.list() }
+            } catch (e: CancellationException) { throw e }
+              catch (e: Exception) { chatError = e.message ?: "切换对话失败，原对话仍保留" }
+            finally { resetting = false }
+        }
     }
 
     LaunchedEffect(Unit) {
-        val snap = withContext(Dispatchers.IO) { container.conversationStore.load() }
+        val epoch = conversationEpoch
+        val snap = conversationIo.withLock {
+            withContext(Dispatchers.IO) { container.conversationStore.load() }
+        }
+        if (conversationEpoch != epoch) {
+            restoring = false
+            return@LaunchedEffect
+        }
         val restored = snap.messages.map { m ->
             ChatMessageUi(
-                role = m.role,
-                text = m.text,
-                reasoning = m.reasoning,
-                imagePath = m.imagePath,
-                audioPath = m.audioPath,
+                role = m.role, text = m.text, reasoning = m.reasoning,
+                imagePath = m.imagePath, audioPath = m.audioPath,
+                generationMetrics = m.generationMetrics,
             )
         }
         if (restored.isNotEmpty()) {
-            // 用「已有的新消息 + 恢复的旧消息」而不是直接覆盖。
-            //
-            // ⚠️ 顺序不能反 —— 必须旧消息在前、新消息在后，否则时间线颠倒。
-            // （如果用户在恢复完成前就发了消息，那条新消息此时已经在 messages 里；
-            //   直接赋成 restored 会把它冲掉，赋成 messages + restored 又会颠倒顺序。）
-            messages = restored + messages
+            messages = restored
+            activeConversationId = snap.conversationId?.takeIf { it.matches(Regex("[0-9a-fA-F-]{36}\\.json")) }
+                ?: java.util.UUID.randomUUID().toString() + ".json"
             lastConversationAt = snap.updatedAt
         }
         snap.error?.let { chatError = "上次的对话历史读取失败：$it" }
         restoring = false
-
-        // 让用户明确知道"历史被恢复了"，否则会以为消息是凭空冒出来的。
         if (restored.isNotEmpty()) {
-            memoryNotice = "已恢复上次的对话（${restored.count { it.role == "user" }} 轮）"
+            val notice = "已恢复上次的对话（${restored.count { it.role == "user" }} 轮）"
+            memoryNotice = notice
             delay(4000)
-            memoryNotice = null
+            if (conversationEpoch == epoch && memoryNotice == notice) memoryNotice = null
         }
     }
 
-    LaunchedEffect(messages, restoring) {
-        // 恢复之前不保存，否则会把空列表写回去，把历史抹掉
-        if (restoring || messages.isEmpty()) return@LaunchedEffect
-        delay(300)
-        val toStore = messages.map { m ->
+    LaunchedEffect(messages, restoring, conversationEpoch, generating) {
+        if (restoring) return@LaunchedEffect
+        // Do not erase a corrupt startup file; only an explicit new chat clears it.
+        if (messages.isEmpty() && conversationEpoch == 0L) return@LaunchedEffect
+        val snapshot = messages
+        if (snapshot.isNotEmpty()) delay(300)
+        val toStore = snapshot.map { m ->
             ConversationStore.StoredMessage(
-                role = m.role,
-                text = m.text,
-                reasoning = m.reasoning,
-                imagePath = m.imagePath,
-                audioPath = m.audioPath,
+                role = m.role, text = m.text, reasoning = m.reasoning,
+                imagePath = m.imagePath, audioPath = m.audioPath,
+                generationMetrics = m.generationMetrics,
             )
         }
-        val ok = withContext(Dispatchers.IO) { container.conversationStore.save(toStore) }
-        if (!ok) {
-            // ConversationStore 刻意不抛异常（丢历史可以接受，但不能崩聊天），
-            // 所以失败只能在这里记一笔 —— 不然"历史存不上"会完全无声。
-            android.util.Log.w(
-                "LocalAI-Gen",
-                "对话历史写入失败（共 ${toStore.size} 条），本次退出后可能丢失",
-            )
+        val ok = conversationIo.withLock {
+            withContext(Dispatchers.IO) {
+                ensureActive()
+                if (snapshot.isEmpty()) container.conversationStore.clear()
+                else {
+                    val saved = container.conversationStore.save(toStore, activeConversationId)
+                    if (saved && !generating && toStore.any { it.isPersistable }) {
+                        container.conversationArchiveStore.archive(toStore, activeConversationId) != null
+                    } else saved
+                }
+            }
         }
+        if (!ok) android.util.Log.w("LocalAI-Gen", "对话历史写入失败（共 ${toStore.size} 条）")
     }
-
     val modelState by container.modelManager.state.collectAsState()
     val skillState by container.skillManager.state.collectAsState()
     val mcpState by container.mcpManager.state.collectAsState()
@@ -206,7 +259,9 @@ fun AppRoot(container: AppContainer, modifier: Modifier = Modifier) {
     val apiState by container.apiProviders.state.collectAsState()
 
     // 生效中的模型名：本地模型优先，其次 API 提供商。
-    val activeModelLabel = loadedModel?.displayName ?: container.apiProviders.activeLabel()
+    val activeModelLabel = if (apiState.active?.canChat == true) {
+        container.apiProviders.activeLabel()
+    } else loadedModel?.displayName
 
     // 本地是否已有可用的 TTS 模型（决定「朗读」按钮是否出现）
     val ttsModelReady = remember(modelState.models) {
@@ -360,178 +415,126 @@ fun AppRoot(container: AppContainer, modifier: Modifier = Modifier) {
     // ---------------- 发送消息 ----------------
     fun send(text: String) {
         val trimmed = text.trim()
-        if (trimmed.isEmpty() || generating) return
-
-        // ⚠️ 门槛必须同时接受两条路径：本地模型 **或** API 提供商。
-        //
-        // 曾经只判 `llmEngine.loadedModel == null`。而「切到 API」时
-        // 代码会 `unload()` 本地模型以释放那几百 MB 内存 ——
-        // 于是 `loadedModel` 变 null，这里直接 return，
-        // 消息**根本没发出去**，界面只留一句「请先加载一个已安装的模型」。
-        // 表现就是「选了 API 但文字发不出去」。
-        val hasLocal = container.llmEngine.loadedModel != null
-        val hasApi = container.apiProviders.active()?.canChat == true
-        if (!hasLocal && !hasApi) {
+        if (trimmed.isEmpty() || generating || restoring || resetting) return
+        val apiForChat = container.apiProviders.active()?.takeIf { it.canChat }
+        if (container.llmEngine.loadedModel == null && apiForChat == null) {
             chatError = "请先选择一个模型：本机模型或 API 云端模型（点「模型」按钮）"
             return
         }
+        val settings = settingsState
         chatError = null
-        // 附件内容作为一轮性的上下文前缀，跟这条消息一起发给模型
         val outgoing = attachedText?.let { "[已附加文件：${attachedName ?: "文件"}]\n$it\n\n$trimmed" }
             ?: trimmed
-        messages = messages + ChatMessageUi("user", trimmed)
-        // 发送后清掉附件，避免每条消息都重复带上
+        val turnHistory = messages + ChatMessageUi("user", trimmed)
+        val assistantIndex = turnHistory.size
+        messages = turnHistory + ChatMessageUi("assistant", "", isStreaming = true)
         attachedName = null
         attachedText = null
+        generating = true // Set before launch, so two rapid sends cannot enter.
+        val id = ++generationId
+        val epoch = conversationEpoch
+        fun ownsTurn() = generationId == id && conversationEpoch == epoch
+        fun updateAssistant(text: String, reasoning: String?, metrics: GenerationMetrics? = null) {
+            if (!ownsTurn() || assistantIndex !in messages.indices) return
+            messages = messages.toMutableList().also {
+                it[assistantIndex] = it[assistantIndex].copy(
+                    text = text, reasoning = reasoning, generationMetrics = metrics,
+                )
+            }
+        }
 
         generateJob = scope.launch {
-            generating = true
-
-            // 0) 组装 system prompt：基础提示 + 已启用的 Skill 索引 + 已连接 MCP 的工具清单。
-            //
-            // 两处都刻意用「渐进式披露」：Skill 只给名称+描述（正文按需展开），
-            // MCP 只给工具名+描述+参数 schema。端侧小模型的上下文很窄，
-            // 把所有 Skill 正文和工具全量塞进去会直接挤爆。
-            val systemPrompt = buildString {
-                append(settingsState.systemPrompt)
-                if (settingsState.skillsEnabled) {
-                    com.mnnkit.app.data.skill.SkillPromptBuilder
-                        .buildIndexPrompt(container.skillManager.enabledSkills())
-                        ?.let { append("\n\n").append(it) }
-                }
-                if (settingsState.mcpEnabled) {
-                    container.mcpManager.buildToolsPrompt()
-                        ?.let { append("\n\n").append(it) }
-                }
-            }
-
-            val config = GenerationConfig(
-                maxNewTokens = settingsState.maxNewTokens,
-                temperature = settingsState.temperature.toDouble(),
-                topP = settingsState.topP.toDouble(),
-                systemPrompt = systemPrompt,
-            )
-
-            // 1) 检索记忆并注入上下文
-            val memCtx = container.memoryManager.buildMemoryContext(outgoing, container.llmEngine)
-            val injected = container.memoryManager.lastInjected()
-            memoryNotice = if (injected.isEmpty()) null else "本轮参考了 ${injected.size} 条记忆"
-
-            // 2) 组装消息序列
-            // 最后一条（就是刚发出去的这条）要用 outgoing —— 它可能带上了附件内容。
-            // UI 上仍显示用户原本输入的 trimmed，附件正文不占屏幕。
-            val history = messages.mapIndexed { i, m ->
-                val text = if (i == messages.lastIndex && m.role == "user") outgoing else m.text
-                ChatMessage(ChatMessage.Role.fromWire(m.role), text)
-            }
-            val full = container.memoryManager.withMemoryContext(history, memCtx, config.systemPrompt)
-
-            // 3) 流式生成
-            //
-            // 两条路径二选一：
-            //   * 选了 API 提供商、且它配了对话模型 → 走云端 / 局域网 API；
-            //   * 否则走本地 MNN 引擎。
-            //
-            // 关键：API 的 messages **从同一份 `history` 映射**，不另起一套组装逻辑。
-            // 否则会出现「切到 API 后模型看不到记忆 / 看不到 Skill 索引」这种偏差 ——
-            // 那种 bug 很难查，因为界面看起来一切正常。
             val acc = StringBuilder()
-            // 思考过程单独累积：它是**另一条流**（delta.reasoning_content），
-            // 不能拼进 acc —— 否则最终回答里会夹进整段「让我想想…」。
             val think = StringBuilder()
-            messages = messages + ChatMessageUi("assistant", "")
-            val apiForChat = container.apiProviders.active()?.takeIf { it.canChat }
-
-            // 生成路径的诊断日志。排查「界面显示 A、实际用 B」这类问题时，
-            // 这是唯一能一锤定音的证据 —— 不要靠界面文字判断用了哪个模型。
-            android.util.Log.i(
-                "LocalAI-Gen",
-                "生成开始：路径=" + (if (apiForChat != null) "API(${apiForChat.name})" else "本地") +
-                    "；引擎 loadedModel=" + (container.llmEngine.loadedModel?.id ?: "null") +
-                    "；localPath=" + (container.llmEngine.loadedModel?.localPath ?: "null") +
-                    "；消息数=" + history.size,
-            )
+            var completed = false
+            var finalMetrics: GenerationMetrics? = null
             try {
+                val systemPrompt = buildString {
+                    append(settings.systemPrompt)
+                    if (settings.skillsEnabled) {
+                        com.mnnkit.app.data.skill.SkillPromptBuilder
+                            .buildIndexPrompt(container.skillManager.enabledSkills())
+                            ?.let { append("\n\n").append(it) }
+                    }
+                    if (settings.mcpEnabled) {
+                        container.mcpManager.buildToolsPrompt()?.let { append("\n\n").append(it) }
+                    }
+                }
+                val config = GenerationConfig(
+                    maxNewTokens = settings.maxNewTokens, temperature = settings.temperature.toDouble(),
+                    topP = settings.topP.toDouble(), systemPrompt = systemPrompt,
+                )
+                val memCtx = container.memoryManager.buildMemoryContext(outgoing, container.llmEngine)
+                ensureActive()
+                if (!ownsTurn()) return@launch
+                val injected = container.memoryManager.lastInjected()
+                memoryNotice = if (injected.isEmpty()) null else "本轮参考了 ${injected.size} 条记忆"
+                val history = turnHistory.mapIndexed { i, m ->
+                    ChatMessage(ChatMessage.Role.fromWire(m.role), if (i == turnHistory.lastIndex) outgoing else m.text)
+                }
+                val full = container.memoryManager.withMemoryContext(history, memCtx, config.systemPrompt)
+                android.util.Log.i("LocalAI-Gen", "生成开始：路径=${if (apiForChat != null) "API" else "本地"}；消息数=${history.size}")
                 if (apiForChat != null) {
                     container.apiProviders.chatStream(
                         provider = apiForChat,
-                        messages = history.map { it.role.wire to it.content },
-                        temperature = config.temperature,
-                        topP = config.topP,
-                        maxTokens = config.maxNewTokens,
-                        systemPrompt = config.systemPrompt,
-                        // 思考强度按官方 `thinking.reasoning_effort` 传。
-                        // 默认 OFF（= none）—— 官方默认是 enabled/high，
-                        // 那会让推理过程吃满 max_tokens、正文为空。
-                        thinking = OpenAiCompatibleClient.ThinkingEffort.fromId(
-                            settingsState.thinkingEffort,
-                        ),
+                        messages = full.map { it.role.wire to it.content },
+                        temperature = config.temperature, topP = config.topP, maxTokens = config.maxNewTokens,
+                        // full already includes the system prompt and retrieved memory, as on local.
+                        systemPrompt = null,
+                        thinking = OpenAiCompatibleClient.ThinkingEffort.fromId(settings.thinkingEffort),
                     ).collect { delta ->
-                        // 两条流分开累积，界面按 [ChatMessageUi.reasoning] 折叠展示。
+                        ensureActive()
                         when (delta) {
-                            is OpenAiCompatibleClient.ChatDelta.Content ->
-                                acc.append(delta.text)
-
-                            is OpenAiCompatibleClient.ChatDelta.Reasoning ->
-                                think.append(delta.text)
+                            is OpenAiCompatibleClient.ChatDelta.Content -> acc.append(delta.text)
+                            is OpenAiCompatibleClient.ChatDelta.Reasoning -> think.append(delta.text)
+                            is OpenAiCompatibleClient.ChatDelta.Metrics -> finalMetrics = delta.metrics
                         }
-                        messages = messages.dropLast(1) + ChatMessageUi(
-                            role = "assistant",
-                            text = acc.toString(),
-                            reasoning = think.toString().ifBlank { null },
-                        )
+                        updateAssistant(acc.toString(), think.toString().ifBlank { null })
                     }
                 } else {
-                    container.llmEngine.stream(full, config).collect { token ->
-                        acc.append(token)
-                        messages = messages.dropLast(1) + ChatMessageUi("assistant", acc.toString())
+                    container.llmEngine.stream(full, config).collect { chunk ->
+                        ensureActive()
+                        acc.append(chunk)
+                        updateAssistant(acc.toString(), null)
                     }
+                    finalMetrics = container.llmEngine.lastGenerationMetrics
                 }
+                ensureActive()
+                completed = true
+                updateAssistant(acc.toString(), think.toString().ifBlank { null }, finalMetrics)
+                if (ownsTurn() && acc.isEmpty()) {
+                    chatError = if (think.isNotEmpty()) {
+                        "模型只产生了思考内容，正文可能被 max_tokens 截断。可展开思考过程、关闭思考或加大最大生成长度。"
+                    } else "模型没有返回内容。"
+                }
+                if (ownsTurn() && acc.isNotEmpty()) {
+                    container.memoryManager.autoExtractFromTurn(trimmed, acc.toString(), container.llmEngine)
+                    ensureActive()
+                    if (ownsTurn()) reloadMemory()
+                }
+            } catch (e: CancellationException) {
+                // User stop is not a failed request, and never edits a newer turn.
+                throw e
             } catch (e: Exception) {
-                // ⚠️ `e.message` 可能是 null（例如 CancellationException、
-                // 或某些 IOException）。直接把它拼进字符串会渲染出「失败：null」，
-                // 用户看到的就是一个毫无信息量的 "null"。
-                val why = e.message?.takeIf { it.isNotBlank() }
-                    ?: e::class.java.simpleName
-                chatError = "生成失败：$why"
-                if (acc.isEmpty()) {
-                    messages = messages.dropLast(1)
+                if (ownsTurn()) {
+                    chatError = if (completed) "回复已完成，记忆提取失败：${e.message}"
+                        else "生成失败：${e.message?.takeIf { it.isNotBlank() } ?: e::class.java.simpleName}"
                 }
             } finally {
-                generating = false
-            }
-
-            // 流正常结束但正文一个字都没有。
-            //
-            // 分两种情况，提示不一样：
-            //   * 有思考内容 ⇒ 推理模型把 `max_tokens` 全花在 reasoning 上了。
-            //     气泡里已经折叠展示了思考，所以这里只补一句说明，不删消息。
-            //   * 连思考也没有 ⇒ 服务端真的没返回任何内容。
-            if (acc.isEmpty() && chatError == null) {
-                val effort = OpenAiCompatibleClient.ThinkingEffort.fromId(
-                    settingsState.thinkingEffort,
-                )
-                chatError = when {
-                    think.isNotEmpty() -> "模型只产生了思考内容，正文被 max_tokens 截断。" +
-                        "展开气泡里的「思考过程」可以看到它想了什么；" +
-                        "把思考强度调成「关闭思考」或加大最大生成长度再试。" +
-                        "当前档位：${effort.label}"
-
-                    apiForChat != null -> "模型没有返回任何内容（思考与正文都是空的）。" +
-                        "当前档位：${effort.label}"
-
-                    else -> "模型没有返回内容。"
+                if (ownsTurn()) {
+                    if (assistantIndex in messages.indices) {
+                        messages = messages.toMutableList().also {
+                            val msg = it[assistantIndex]
+                            if (msg.text.isBlank() && msg.reasoning.isNullOrBlank()) it.removeAt(assistantIndex)
+                            else it[assistantIndex] = msg.copy(isStreaming = false)
+                        }
+                    }
+                    generating = false
+                    generateJob = null
                 }
-            }
-
-            // 4) 自动写入记忆
-            if (acc.isNotEmpty()) {
-                container.memoryManager.autoExtractFromTurn(trimmed, acc.toString(), container.llmEngine)
-                reloadMemory()
             }
         }
     }
-
     MnnTheme(
         accentColor = MnnAccentColor.fromId(settingsState.accentColor),
         darkTheme = when (settingsState.themeMode) {
@@ -552,6 +555,14 @@ fun AppRoot(container: AppContainer, modifier: Modifier = Modifier) {
             // 顶栏右上角「新对话」。**先弹确认框**，不直接清 ——
             // 清空会同时删掉磁盘上的历史（不可撤销），一个误触就没了。
             onNewChat = { confirmNewChat = true },
+            onChatHistory = {
+                scope.launch {
+                    conversationHistory = conversationIo.withLock {
+                        withContext(Dispatchers.IO) { container.conversationArchiveStore.list() }
+                    }
+                    showConversationHistory = true
+                }
+            },
             hasChat = messages.isNotEmpty(),
             // 玻璃浮层：输入区。它必须在采集层之外，所以走这个插槽，
             // 而不是画在 ChatScreen 里（那样会自引用崩溃）。
@@ -560,7 +571,7 @@ fun AppRoot(container: AppContainer, modifier: Modifier = Modifier) {
                     GlassInputBar(
                         input = chatInput,
                         generating = generating,
-                        canSend = !generating &&
+                        canSend = !generating && !restoring && !resetting &&
                             (container.llmEngine.loadedModel != null ||
                                 container.apiProviders.active()?.canChat == true),
                         attachedFileName = attachedName,
@@ -570,8 +581,6 @@ fun AppRoot(container: AppContainer, modifier: Modifier = Modifier) {
                         },
                         onStop = {
                             generateJob?.cancel()
-                            generateJob = null
-                            generating = false
                         },
                         onPickFile = {
                             filePicker.launch(
@@ -629,8 +638,6 @@ fun AppRoot(container: AppContainer, modifier: Modifier = Modifier) {
                     onSend = ::send,
                     onStop = {
                         generateJob?.cancel()
-                        generateJob = null
-                        generating = false
                     },
                     onSpeak = { text ->
                         // 朗读：合成 → 播放 → 把音频路径写回该条消息，让「下载音频」出现。
@@ -820,7 +827,11 @@ fun AppRoot(container: AppContainer, modifier: Modifier = Modifier) {
                     },
                     settings = settingsState,
                     onSettingsChange = { transform ->
+                        val oldBackend = container.settings.state.value.backendType
                         container.settings.update(transform)
+                        if (oldBackend != container.settings.state.value.backendType && loadedModel != null) {
+                            memoryNotice = "推理后端已保存；当前模型仍使用加载时的后端。请在「模型」中重新选择该模型以应用。"
+                        }
                     },
                     // ── API 接入 ──
                     apiProviders = apiState,
@@ -884,6 +895,27 @@ fun AppRoot(container: AppContainer, modifier: Modifier = Modifier) {
                         // 无论成败都要同步：失败时引擎里可能已经是 null（旧会话被释放了），
                         // 不同步的话界面会继续显示一个其实已经不存在的模型。
                         syncLoadedModel()
+                        if (loadedModel != null) {
+                            val nativeEngine = container.llmEngine as? com.mnnkit.app.llm.MnnLlmEngine
+                            val backend = nativeEngine?.loadedBackend
+                            val expected = when (backend) {
+                                "cpu" -> 0
+                                "opencl" -> 3
+                                "vulkan" -> 7
+                                "npu" -> 5
+                                else -> null
+                            }
+                            val reported = com.mnnkit.core.json.JsonParser
+                                .parseOrNull(nativeEngine?.backendReport.orEmpty())
+                                ?.arr("executor_runtime_backends")
+                                ?.mapNotNull { it.asInt }.orEmpty()
+                            memoryNotice = when {
+                                expected == null -> "模型已加载；未识别的后端配置，请核对模型日志。"
+                                expected !in reported -> "后端警告：请求 $backend，运行时未报告相应后端（$reported）；可能回退 CPU。"
+                                backend != "cpu" -> "已创建 $backend 运行时；逐算子执行位置未验证，仍可能回退 CPU。"
+                                else -> "CPU 运行时已创建；逐算子执行位置未验证。"
+                            }
+                        }
                     }
                 },
                 onPickApi = { provider ->
@@ -915,17 +947,59 @@ fun AppRoot(container: AppContainer, modifier: Modifier = Modifier) {
             )
         }
 
-        // ── 「新对话」确认框 ──
-        //
-        // 为什么要有这一步：点错一下就会**连磁盘上的历史一起删掉**，不可撤销。
-        // 按钮就在顶栏右上角，误触成本很低，所以加一道确认拦住。
+        // 新对话前先归档当前会话；历史可通过顶栏按钮再次打开。
         if (confirmNewChat) {
             NewChatConfirmDialog(
                 onConfirm = {
                     confirmNewChat = false
-                    startNewChat()
+                    changeConversation()
                 },
                 onDismiss = { confirmNewChat = false },
+            )
+        }
+        if (showConversationHistory) {
+            ConversationHistoryDialog(
+                entries = conversationHistory,
+                onOpen = { id -> changeConversation(id) },
+                onDelete = { id ->
+                    if (resetting || restoring) {
+                        chatError = "正在切换对话，请稍后重试"
+                    } else {
+                        val deletingActive = id == activeConversationId
+                        val oldJob = if (deletingActive) generateJob else null
+                        if (deletingActive) { generationId++; oldJob?.cancel(); resetting = true }
+                        scope.launch {
+                            try {
+                                oldJob?.cancelAndJoin()
+                                val removed = conversationIo.withLock {
+                                    withContext(Dispatchers.IO) {
+                                        if (!deletingActive) container.conversationArchiveStore.delete(id)
+                                        else if (!container.conversationStore.clear()) false
+                                        else if (container.conversationArchiveStore.delete(id)) true
+                                        else {
+                                            container.conversationStore.save(storedMessages(messages), id)
+                                            false
+                                        }
+                                    }
+                                }
+                                if (removed) {
+                                    if (deletingActive) {
+                                        conversationEpoch++
+                                        messages = emptyList()
+                                        activeConversationId = java.util.UUID.randomUUID().toString() + ".json"
+                                        generateJob = null
+                                        generating = false
+                                        showConversationHistory = false
+                                        container.llmEngine.resetContext()
+                                    }
+                                    conversationHistory = withContext(Dispatchers.IO) { container.conversationArchiveStore.list() }
+                                } else chatError = "删除历史对话未完成，请重试"
+                            } catch (e: Exception) { chatError = "删除历史对话失败：${e.message}" }
+                            finally { if (deletingActive) resetting = false }
+                        }
+                    }
+                },
+                onDismiss = { showConversationHistory = false },
             )
         }
     }
@@ -934,8 +1008,7 @@ fun AppRoot(container: AppContainer, modifier: Modifier = Modifier) {
 /**
  * 「新对话」确认弹窗。
  *
- * 文案里**明确写出「会删除本机保存的对话记录」** ——
- * 只说「开始新对话」的话，用户不会意识到历史被删了，等发现时已经找不回来。
+ * 当前对话归档后可以从右上角历史按钮恢复。
  */
 @Composable
 private fun NewChatConfirmDialog(
@@ -954,8 +1027,8 @@ private fun NewChatConfirmDialog(
                     color = MnnTextColor.primary,
                 )
                 Text(
-                    "当前对话会从本机清除，包括启动时自动恢复的历史记录。" +
-                        "此操作不可撤销。",
+                    "当前对话将自动保存到对话历史，随后开始空白对话。" +
+                        "可随时点击右上角「历史」重新打开。",
                     style = MiuixTheme.textStyles.body2,
                     color = MnnTextColor.secondary,
                 )
@@ -968,7 +1041,7 @@ private fun NewChatConfirmDialog(
                 ) {
                     MnnCapsuleButton(text = "取消", onClick = onDismiss)
                     MnnCapsuleButton(
-                        text = "清除并新建",
+                        text = "归档并新建",
                         onClick = onConfirm,
                         emphasized = true,
                     )

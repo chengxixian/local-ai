@@ -84,7 +84,7 @@ struct AndroidSteppingStreamState {
             return;
         }
         std::string response_result = response_buffer.str();
-        MNN_DEBUG("%s %s", result_log_tag, response_result.c_str());
+        MNN_DEBUG("%s bytes=%zu", result_log_tag, response_result.size());
         response_string_for_debug = response_result;
         on_response_complete(response_result);
         if (on_progress) {
@@ -234,9 +234,9 @@ bool LlmSession::Load() {
     }
     current_config_ = config;
     auto config_str = config.dump();
-    MNN_DEBUG("extra_config: %s", config_str.c_str());
+    // Never log configuration bodies: they include private system prompts.
     llm_->set_config(config_str);
-    MNN_DEBUG("dumped config: %s", llm_->dump_config().c_str());
+    // Requested configuration is not runtime execution evidence.
     model_loaded_ = llm_->load();
     if (!model_loaded_) {
         last_load_error_ = "Model load failed for config: " + model_path_ +
@@ -331,7 +331,7 @@ const MNN::Transformer::LlmContext * LlmSession::RunResponse(
     for (auto & it : history_) {
         prompt_string_for_debug += it.second;
     }
-    MNN_DEBUG("submitNative prompt_string_for_debug count %s max_new_tokens_:%d", prompt_string_for_debug.c_str(), max_new_tokens_);
+    MNN_DEBUG("submitNative messages=%zu max_new_tokens=%d", history_.size(), max_new_tokens_);
 
     restoreAndroidSteppingStatusIfNeeded(llm_);
     // Prefill only. Stepping decode one token at a time via llm_->generate(1) keeps
@@ -435,6 +435,33 @@ std::string LlmSession::dumpConfig() const {
         return llm_->dump_config();
     }
     return "{}";
+}
+
+void LlmSession::setRuntimeConfig(const std::string& config_json) {
+    if (llm_ == nullptr) {
+        return;
+    }
+    // MNN 的 set_config 会把这几个键 merge 进现有配置，并在下一轮 response()
+    // 生效（不需要重新加载模型）。用来运行时关掉原生模板渲染。
+    llm_->set_config(config_json);
+    MNN_DEBUG("setRuntimeConfig updated");
+}
+
+std::string LlmSession::backendDiagnostics() const {
+    json report;
+    report["requested_backend"] = config_.value("backend_type", std::string("model_default"));
+    report["executor_runtime_backends"] = json::array();
+    report["execution_backend_verified"] = false;
+    report["evidence_kind"] = "created_runtime_not_per_operator_execution";
+    if (llm_ != nullptr && llm_->getExecutor()) {
+        MNN::Express::ExecutorScope scope(llm_->getExecutor());
+        const auto runtime = MNN::Express::Executor::getRuntime();
+        for (const auto& entry : runtime.first) {
+            report["executor_runtime_backends"].push_back(static_cast<int>(entry.first));
+        }
+        report["cpu_backup_runtime_present"] = runtime.second != nullptr;
+    }
+    return report.dump();
 }
 
 } // namespace mls

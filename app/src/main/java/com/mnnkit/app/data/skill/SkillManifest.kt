@@ -89,9 +89,9 @@ object SkillManifestParser {
             val metadata = parseMetadata(fields["metadata"])
 
             val manifest = SkillManifest(
-                name = fields["name"].orEmpty().trim(),
+                name = cleanScalar(fields["name"].orEmpty()),
                 description = cleanScalar(fields["description"].orEmpty()),
-                license = fields["license"].orEmpty().trim(),
+                license = cleanScalar(fields["license"].orEmpty()),
                 compatibility = fields["compatibility"].orEmpty().trim(),
                 allowedTools = fields["allowed-tools"].orEmpty()
                     .split(' ', '\n', '\t')

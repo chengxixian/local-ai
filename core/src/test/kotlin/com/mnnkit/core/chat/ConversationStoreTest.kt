@@ -135,6 +135,44 @@ class ConversationStoreTest {
         assertEquals(123L, snap.updatedAt)
     }
 
+    @Test
+    fun `round trips metrics for both sources without affecting old messages`() {
+        val native = assertNotNull(GenerationMetrics.fromNativeDecode(100, 2_000_000))
+        val api = assertNotNull(GenerationMetrics.fromApiUsage(30, 3_000_000_000))
+        val src = listOf(
+            msg("user", "hi"),
+            msg("assistant", "local").copy(generationMetrics = native),
+            msg("assistant", "cloud").copy(generationMetrics = api),
+        )
+        assertEquals(src, ConversationStore.decode(ConversationStore.encode(src)).messages)
+        val legacy = ConversationStore.decode("""{"version":1,"messages":[{"role":"assistant","text":"old"}]}""")
+        assertNull(legacy.messages.single().generationMetrics)
+    }
+
+    @Test
+    fun `malformed optional metrics do not discard the message`() {
+        val invalid = listOf(
+            "null", "{}",
+            """{"completionTokens":-1,"durationSeconds":2,"source":"NATIVE_DECODE"}""",
+            """{"completionTokens":1.5,"durationSeconds":2,"source":"NATIVE_DECODE"}""",
+            """{"completionTokens":4,"durationSeconds":0,"source":"NATIVE_DECODE"}""",
+            """{"completionTokens":4,"durationSeconds":-1,"source":"NATIVE_DECODE"}""",
+            """{"completionTokens":4,"durationSeconds":"NaN","source":"NATIVE_DECODE"}""",
+            """{"completionTokens":4,"durationSeconds":1e309,"source":"NATIVE_DECODE"}""",
+            """{"completionTokens":4,"durationSeconds":2,"source":"future"}""",
+            """{"completionTokens":"4","durationSeconds":2,"source":"API_WALL_CLOCK"}""",
+            """{"completionTokens":9223372036854775807,"durationSeconds":2,"source":"NATIVE_DECODE"}""",
+        )
+        for (metrics in invalid) {
+            val snapshot = ConversationStore.decode(
+                """{"version":1,"messages":[{"role":"assistant","text":"kept","generationMetrics":$metrics}]}""",
+            )
+            assertNull(snapshot.error, metrics)
+            assertEquals("kept", snapshot.messages.single().text)
+            assertNull(snapshot.messages.single().generationMetrics, metrics)
+        }
+    }
+
     // ───────────────────────── 真实文件读写（「退出后还在吗」） ─────────────────────────
 
     @Test

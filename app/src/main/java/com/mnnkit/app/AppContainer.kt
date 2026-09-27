@@ -71,6 +71,9 @@ class AppContainer(context: Context) {
      *  - [conversationStore]：原样的对话消息，用于重启后恢复界面与上下文。
      */
     val conversationStore = ConversationStore(storage.conversationFile)
+    val conversationArchiveStore = com.mnnkit.core.chat.ConversationArchiveStore(
+        File(storage.conversationFile.parentFile, "history"),
+    )
 
     /**
      * Skill 库：内置索引 + GitHub 安装 + 启用状态。
@@ -102,12 +105,10 @@ class AppContainer(context: Context) {
      */
     val llmEngine: LlmEngine by lazy {
         runCatching {
-            // 推理后端从设置读入（CPU / OpenCL / Vulkan / NPU）。
-            // 引擎是 by lazy、进程内只构造一次，用户改后端后重启应用生效。
+            // 每次加载读取最新后端；思考开关每轮读取，不能捕获首次创建时的值。
             MnnLlmEngine(
-                backendType = settings.state.value.backendType,
-                // 「关闭思考」= thinkingEffort 为 none（默认）。
-                enableThinking = settings.state.value.thinkingEffort != "none",
+                backendProvider = { settings.state.value.backendType },
+                thinkingProvider = { settings.state.value.thinkingEffort != "none" },
             ) as LlmEngine
         }
             .getOrElse { UnavailableLlmEngine(it.message ?: "MNN 原生库加载失败") }

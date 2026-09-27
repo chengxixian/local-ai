@@ -20,8 +20,8 @@ android {
         // 实现真实折射与高光，这两者分别是 API 31 / API 33 起可用）
         minSdk = 33
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.4.0-beta1"
+        versionCode = 6
+        versionName = "0.5.0-beta2"
 
         ndk {
             abiFilters += "arm64-v8a"

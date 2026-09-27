@@ -67,8 +67,6 @@ import com.mnnkit.core.model.ModelKind
 import com.mnnkit.core.model.ModelSource
 import com.mnnkit.core.model.ModelStatus
 import kotlinx.coroutines.launch
-import top.yukonga.miuix.kmp.basic.Button
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -288,16 +286,25 @@ private fun SearchCard(currentKeyword: String, onSearch: (String) -> Unit) {
                 )
             }
             Spacer(Modifier.width(MnnSpacing.inline))
-            Button(
+            MnnButton(
                 onClick = { onSearch(fieldState.text.toString()) },
-                colors = ButtonDefaults.buttonColorsPrimary(),
-            ) { Text("搜索") }
+                style = MnnButtonStyle.Primary,
+                content = {
+                    Text("搜索")
+                },
+            )
             if (currentKeyword.isNotBlank()) {
                 Spacer(Modifier.width(MnnSpacing.tight))
-                Button(onClick = {
+                MnnButton(
+onClick = {
                     fieldState.clearText()
                     onSearch("")
-                }) { Text("清除") }
+                },
+                    style = MnnButtonStyle.Primary,
+                    content = {
+                        Text("清除")
+                    },
+                )
             }
         }
     }
@@ -339,22 +346,24 @@ private fun ImportCard(
             Text("模型用途", style = MiuixTheme.textStyles.footnote1)
             LazyRow(horizontalArrangement = Arrangement.spacedBy(MnnSpacing.inline)) {
                 items(ModelKind.entries.toList(), key = { "imp-${it.id}" }) { k ->
-                    Button(
+                    MnnButton(
                         onClick = { kind = k },
-                        colors = if (k == kind) {
-                            ButtonDefaults.buttonColorsPrimary()
-                        } else {
-                            ButtonDefaults.buttonColors()
+                        style = MnnButtonStyle.Tonal,
+                        content = {
+                            Text(k.label)
                         },
-                    ) { Text(k.label) }
+                    )
                 }
             }
             val link = linkState.text.toString()
-            Button(
+            MnnButton(
                 onClick = { onImport(link, kind) },
                 enabled = link.isNotBlank() && !importState.busy,
-                colors = ButtonDefaults.buttonColorsPrimary(),
-            ) { Text(if (importState.busy) "识别中…" else "识别并安装") }
+                style = MnnButtonStyle.Primary,
+                content = {
+                    Text(if (importState.busy) "识别中…" else "识别并安装")
+                },
+            )
             importState.message?.let {
                 Text(
                     it,
@@ -467,7 +476,13 @@ private fun ModelCard(
                         color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     )
                 }
-                Button(onClick = onCancel) { Text("取消下载") }
+                MnnButton(
+                    onClick = onCancel,
+                    style = MnnButtonStyle.Primary,
+                    content = {
+                        Text("取消下载")
+                    },
+                )
             }
 
             ModelStatus.READY -> {
@@ -477,11 +492,15 @@ private fun ModelCard(
                     value = item.localPath.orEmpty(),
                     tint = MiuixTheme.colorScheme.primary,
                 )
-                Button(onClick = onUninstall) {
-                    Icon(Icons.Rounded.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(MnnSpacing.tight))
-                    Text("删除")
-                }
+                MnnButton(
+                    onClick = onUninstall,
+                    style = MnnButtonStyle.Primary,
+                    content = {
+                        Icon(Icons.Rounded.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(MnnSpacing.tight))
+                        Text("删除")
+                    },
+                )
             }
 
             ModelStatus.FAILED -> {
@@ -490,7 +509,13 @@ private fun ModelCard(
                     icon = Icons.Rounded.Warning,
                     color = MiuixTheme.colorScheme.error,
                 )
-                Button(onClick = { onInstall(chosenSource) }) { Text("重试") }
+                MnnButton(
+                    onClick = { onInstall(chosenSource) },
+                    style = MnnButtonStyle.Primary,
+                    content = {
+                        Text("重试")
+                    },
+                )
             }
 
             ModelStatus.REMOTE -> {
@@ -499,25 +524,25 @@ private fun ModelCard(
                     Text("下载源", style = MiuixTheme.textStyles.footnote1)
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(MnnSpacing.inline)) {
                         items(sources, key = { "s-${item.id}-${it.id}" }) { s ->
-                            Button(
+                            MnnButton(
                                 onClick = { chosenSource = s },
-                                colors = if (s == chosenSource) {
-                                    ButtonDefaults.buttonColorsPrimary()
-                                } else {
-                                    ButtonDefaults.buttonColors()
+                                style = MnnButtonStyle.Tonal,
+                                content = {
+                                    Text(s.label)
                                 },
-                            ) { Text(s.label) }
+                            )
                         }
                     }
                 }
-                Button(
+                MnnButton(
                     onClick = { onInstall(chosenSource) },
-                    colors = ButtonDefaults.buttonColorsPrimary(),
-                ) {
-                    Icon(Icons.Rounded.CloudDownload, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(MnnSpacing.tight))
-                    Text("下载并安装")
-                }
+                    style = MnnButtonStyle.Primary,
+                    content = {
+                        Icon(Icons.Rounded.CloudDownload, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(MnnSpacing.tight))
+                        Text("下载并安装")
+                    },
+                )
 
                 if (item.format.needsConversion) {
                     ConvertPanel(item = item)
@@ -559,7 +584,7 @@ private fun ConvertPanel(item: ModelItem) {
                 style = MiuixTheme.textStyles.footnote1,
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
             )
-            Button(
+            MnnButton(
                 onClick = {
                     running = true
                     status = null
@@ -570,8 +595,11 @@ private fun ConvertPanel(item: ModelItem) {
                     }
                 },
                 enabled = !running && item.localPath != null,
-                colors = ButtonDefaults.buttonColorsPrimary(),
-            ) { Text(if (running) "转换中…" else "在本机转换") }
+                style = MnnButtonStyle.Primary,
+                content = {
+                    Text(if (running) "转换中…" else "在本机转换")
+                },
+            )
             if (item.localPath == null) {
                 Text(
                     "请先下载该模型",

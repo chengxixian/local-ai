@@ -235,8 +235,17 @@ Java_com_mnnkit_app_llm_MnnLlmSession_initNative(JNIEnv* env, jobject thiz,
     // 于是 Qwen3 仍进入思考模式，吐完思考标记就 <eop>，
     // 整轮只生成 1 个 token（PERF 日志 decode_len=1）。
     take_over("jinja");
+    // Forward ALL engine overrides, not just prompt fields. Keeping backend_type
+    // only in extra_config silently ignored CPU/OpenCL/Vulkan selections.
+    // Wrapper-only options stay available to LlmSession's constructor.
+    for (auto it = extra_json_config.begin(); it != extra_json_config.end(); ++it) {
+        if (it.key() != "keep_history" && it.key() != "mmap_dir" &&
+            it.key() != "backend_diagnostics") {
+            merged_config[it.key()] = it.value();
+        }
+    }
 
-    MNN_DEBUG("createLLM BeginLoad %s", config_path.c_str());
+    MNN_DEBUG("createLLM BeginLoad");
     auto* llm_session = new mls::LlmSession(config_path, merged_config, extra_json_config,
                                             std::vector<std::string>());
     bool load_success = llm_session->Load();
@@ -439,6 +448,29 @@ Java_com_mnnkit_app_llm_MnnLlmSession_getSystemPromptNative(JNIEnv* env, jobject
         return env->NewStringUTF(system_prompt.c_str());
     }
     return nullptr;
+}
+
+JNIEXPORT void JNICALL
+Java_com_mnnkit_app_llm_MnnLlmSession_setConfigNative(JNIEnv* env, jobject thiz,
+                                                      jlong handle, jstring configJson) {
+    auto* llm = reinterpret_cast<mls::LlmSession*>(handle);
+    if (configJson == nullptr) {
+        return;
+    }
+    const char* json_cstr = env->GetStringUTFChars(configJson, nullptr);
+    if (llm && json_cstr != nullptr) {
+        llm->setRuntimeConfig(json_cstr);
+    }
+    if (json_cstr != nullptr) {
+        env->ReleaseStringUTFChars(configJson, json_cstr);
+    }
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_mnnkit_app_llm_MnnLlmSession_backendDiagnosticsNative(JNIEnv* env, jobject, jlong handle) {
+    auto* session = reinterpret_cast<mls::LlmSession*>(handle);
+    const std::string report = session ? session->backendDiagnostics() : "{}";
+    return env->NewStringUTF(report.c_str());
 }
 
 JNIEXPORT void JNICALL

@@ -174,6 +174,7 @@ fun AppShell(
      * ConversationStore）；这里只负责把按钮放在顶栏的 `trailing` 槽里。
      */
     onNewChat: () -> Unit = {},
+    onChatHistory: () -> Unit = {},
     /**
      * 对话页是否已有消息（决定右上角「新对话」按钮显不显示）。
      */
@@ -259,6 +260,9 @@ fun AppShell(
                         // 「灰字配浅底」看不清（见 MnnButtons.kt 的长注释）。
                         // 所以这个按钮也自己画，配色显式给定。
                         actions = {
+                            if (tab == TopTab.Chat) {
+                                MnnCapsuleButton(text = "历史", onClick = onChatHistory)
+                            }
                             if (tab == TopTab.Chat && hasChat) {
                                 MnnCapsuleButton(
                                     text = "新对话",

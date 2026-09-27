@@ -1,5 +1,7 @@
 {
   "_comment": "精选 Skill 索引。字段名必须与 SkillManager.loadIndex() 逐字一致。",
+  "_note_path": "离线精选入口；联网浏览会递归发现仓库实际 SKILL.md。安装前校验精确子目录。",
+  "_note_license": "空值表示离线索引未核实许可；联网浏览和安装从各自 SKILL.md frontmatter 读取实际声明，不推断仓库统一许可。",
   "_schema": {
     "id": "唯一标识",
     "name": "展示名（可与 SKILL.md 的 name 不同）",
@@ -18,38 +20,8 @@
       "owner": "anthropics",
       "repo": "skills",
       "branch": "main",
-      "path": "skill-creator",
-      "license": "Apache-2.0"
-    },
-    {
-      "id": "artifacts-builder",
-      "name": "产物构建器",
-      "description": "把需求拆成可交付的文件产物（文档、脚本、配置），并给出目录结构建议。",
-      "owner": "anthropics",
-      "repo": "skills",
-      "branch": "main",
-      "path": "artifacts-builder",
-      "license": "Apache-2.0"
-    },
-    {
-      "id": "mcp-builder",
-      "name": "MCP 服务端构建器",
-      "description": "协助编写 MCP 服务端：JSON-RPC 握手、tools/list 与 tools/call 的实现要点。",
-      "owner": "anthropics",
-      "repo": "skills",
-      "branch": "main",
-      "path": "mcp-builder",
-      "license": "Apache-2.0"
-    },
-    {
-      "id": "pdf",
-      "name": "PDF 处理",
-      "description": "读取、拆分、合并、填表与提取 PDF 文本的常规做法与命令行工具用法。",
-      "owner": "anthropics",
-      "repo": "skills",
-      "branch": "main",
-      "path": "pdf",
-      "license": "Apache-2.0"
+      "path": "skills/skill-creator",
+      "license": ""
     },
     {
       "id": "docx",
@@ -58,8 +30,8 @@
       "owner": "anthropics",
       "repo": "skills",
       "branch": "main",
-      "path": "docx",
-      "license": "Apache-2.0"
+      "path": "skills/docx",
+      "license": ""
     },
     {
       "id": "xlsx",
@@ -68,8 +40,8 @@
       "owner": "anthropics",
       "repo": "skills",
       "branch": "main",
-      "path": "xlsx",
-      "license": "Apache-2.0"
+      "path": "skills/xlsx",
+      "license": ""
     },
     {
       "id": "pptx",
@@ -78,18 +50,158 @@
       "owner": "anthropics",
       "repo": "skills",
       "branch": "main",
-      "path": "pptx",
-      "license": "Apache-2.0"
+      "path": "skills/pptx",
+      "license": ""
     },
     {
-      "id": "code-review",
-      "name": "代码审查",
-      "description": "按「正确性 → 边界 → 可读性 → 性能」顺序审查改动，输出可执行的修改建议。",
+      "id": "pdf",
+      "name": "PDF 处理",
+      "description": "读取、拆分、合并、填表与提取 PDF 文本的常规做法与命令行工具用法。",
       "owner": "anthropics",
       "repo": "skills",
       "branch": "main",
-      "path": "",
-      "license": "Apache-2.0"
+      "path": "skills/pdf",
+      "license": ""
+    },
+    {
+      "id": "mcp-builder",
+      "name": "MCP 服务端构建器",
+      "description": "协助编写 MCP 服务端：JSON-RPC 握手、tools/list 与 tools/call 的实现要点。",
+      "owner": "anthropics",
+      "repo": "skills",
+      "branch": "main",
+      "path": "skills/mcp-builder",
+      "license": ""
+    },
+    {
+      "id": "canvas-design",
+      "name": "画布设计",
+      "description": "在画布上做排版与视觉设计：栅格、留白、层级与配色的可复用套路。",
+      "owner": "anthropics",
+      "repo": "skills",
+      "branch": "main",
+      "path": "skills/canvas-design",
+      "license": ""
+    },
+    {
+      "id": "frontend-design",
+      "name": "前端设计",
+      "description": "前端界面设计要点：布局、响应式、可访问性与视觉一致性的检查清单。",
+      "owner": "anthropics",
+      "repo": "skills",
+      "branch": "main",
+      "path": "skills/frontend-design",
+      "license": ""
+    },
+    {
+      "id": "webapp-testing",
+      "name": "Web 应用测试",
+      "description": "为 Web 应用设计测试：用例划分、边界条件与自动化测试的组织方式。",
+      "owner": "anthropics",
+      "repo": "skills",
+      "branch": "main",
+      "path": "skills/webapp-testing",
+      "license": ""
+    },
+    {
+      "id": "web-artifacts-builder",
+      "name": "Web 产物构建器",
+      "description": "把需求拆成可直接运行的 HTML/JS 单文件产物，并给出结构与交互建议。",
+      "owner": "anthropics",
+      "repo": "skills",
+      "branch": "main",
+      "path": "skills/web-artifacts-builder",
+      "license": ""
+    },
+    {
+      "id": "algorithmic-art",
+      "name": "算法艺术",
+      "description": "用代码生成图形艺术：噪声、粒子、递归与参数化的实践方法。",
+      "owner": "anthropics",
+      "repo": "skills",
+      "branch": "main",
+      "path": "skills/algorithmic-art",
+      "license": ""
+    },
+    {
+      "id": "brand-guidelines",
+      "name": "品牌规范",
+      "description": "把品牌规范落到文案与视觉上：语气、用词、Logo 使用与一致性检查。",
+      "owner": "anthropics",
+      "repo": "skills",
+      "branch": "main",
+      "path": "skills/brand-guidelines",
+      "license": ""
+    },
+    {
+      "id": "doc-coauthoring",
+      "name": "文档协作",
+      "description": "和模型一起写长文档：大纲先行、分段确认与修订留痕的协作流程。",
+      "owner": "anthropics",
+      "repo": "skills",
+      "branch": "main",
+      "path": "skills/doc-coauthoring",
+      "license": ""
+    },
+    {
+      "id": "slack-gif-creator",
+      "name": "Slack GIF 生成",
+      "description": "制作适合在聊天里发送的短 GIF：尺寸、帧率、循环与体积控制。",
+      "owner": "anthropics",
+      "repo": "skills",
+      "branch": "main",
+      "path": "skills/slack-gif-creator",
+      "license": ""
+    },
+    {
+      "id": "theme-factory",
+      "name": "主题工厂",
+      "description": "批量生成成套配色与主题：色阶推导、对比度校验与导出格式。",
+      "owner": "anthropics",
+      "repo": "skills",
+      "branch": "main",
+      "path": "skills/theme-factory",
+      "license": ""
+    },
+    {
+      "id": "internal-comms",
+      "name": "内部沟通",
+      "description": "撰写内部沟通材料：公告、周报与跨团队同步的结构与语气。",
+      "owner": "anthropics",
+      "repo": "skills",
+      "branch": "main",
+      "path": "skills/internal-comms",
+      "license": ""
+    },
+    {
+      "id": "claude-api",
+      "name": "Claude API",
+      "description": "调用 Claude API 的要点：鉴权、消息结构、流式与错误处理。",
+      "owner": "anthropics",
+      "repo": "skills",
+      "branch": "main",
+      "path": "skills/claude-api",
+      "license": ""
+    },
+    {
+      "id": "academy-guide",
+      "name": "学习指引",
+      "description": "把学习目标拆成可执行的路径与练习，并给出自检方式。",
+      "owner": "anthropics",
+      "repo": "skills",
+      "branch": "main",
+      "path": "skills/academy-guide",
+      "license": ""
+    },
+    {
+      "id": "discernment-nudge",
+      "name": "判断力提醒",
+      "description": "在信息不足或结论可疑时，提示需要额外核实的地方。",
+      "owner": "anthropics",
+      "repo": "skills",
+      "branch": "main",
+      "path": "skills/discernment-nudge",
+      "license": ""
     }
   ]
 }

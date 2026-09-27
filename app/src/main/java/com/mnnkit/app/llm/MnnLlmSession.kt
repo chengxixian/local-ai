@@ -163,6 +163,25 @@ class MnnLlmSession internal constructor(
         cancelRequested = true
     }
 
+    /** Runtime template context; never changes downloaded model files. */
+    fun applyGenerationConfig(config: GenerationConfig, enableThinking: Boolean) {
+        checkAvailable()
+        check(nativeHandle != 0L) { "session not loaded" }
+        val json = Json.Obj(mapOf(
+            "jinja" to Json.Obj(mapOf("context" to Json.Obj(mapOf(
+                "enable_thinking" to Json.Bool(enableThinking),
+            )))),
+        )).stringify()
+        setConfigNative(nativeHandle, json)
+    }
+
+    /** Runtime evidence, not a copy of requested backend_type. */
+    fun backendDiagnostics(): String {
+        if (nativeHandle == 0L) return "{}"
+        return backendDiagnosticsNative(nativeHandle)
+    }
+    private external fun backendDiagnosticsNative(handle: Long): String
+
     /** 清空 KV cache 与对话历史（保留 system 轮）。 */
     fun reset() {
         val handle = nativeHandle
@@ -305,6 +324,9 @@ class MnnLlmSession internal constructor(
 
     private external fun clearHistoryNative(handle: Long)
 
+    /** 把一段 JSON 合并进运行时配置（对应 MNN `Llm::set_config`）。 */
+    private external fun setConfigNative(handle: Long, configJson: String)
+
     companion object {
         const val TAG = "MnnLlmSession"
 
@@ -404,34 +426,7 @@ class MnnLlmSession internal constructor(
              * 见 [com.mnnkit.app.data.InferenceBackend]。
              */
             backendType: String? = null,
-            /**
-             * 是否开启思考模式。见 [com.mnnkit.app.data.api.OpenAiCompatibleClient.ThinkingEffort]。
-             *
-             * ## 事实核对（别再照抄旧结论）
-             *
-             * 这里曾经写着「经 extra config 传 `enable_thinking` **不生效**，
-             * 因为 MNN 的 `LlmConfig` 是浅合并、`jinja` 被 `llm_config.json`
-             * 整体覆盖」。**那个结论是错的**，已在 MNN 源码里逐行核对：
-             *
-             *  - `LlmConfig::LlmConfig` 用 `config_.merge(llm_config_)`
-             *    （`transformers/llm/engine/src/llmconfig.hpp:94`）；
-             *  - `ujson::json::merge` 对**两侧都是 object** 的键是**递归深合并**
-             *    （`ujson.hpp:292-302`：`if (contains(key) && (*this)[key].is_object()
-             *    && it.value().is_object()) (*this)[key].merge(it.value());`）。
-             *
-             * 所以 `{"jinja":{"context":{"enable_thinking":false}}}` 会与模型自带的
-             * `jinja.chat_template` / `jinja.context` 合并，而**不是**替换掉 jinja。
-             * 下游链路也确认能到模板：`Llm::set_config` → `setChatTemplate()`
-             * → `Tokenizer::set_chat_template_context` → `apply_chat_template`
-             * 把 context 作为 `extra_context` 传进 jinja 渲染
-             * （`llm.cpp:139-142`、`llm.cpp:113-137`、`tokenizer.cpp:1018-1054`、
-             * `jinja.hpp:2234`），模板里的 `enable_thinking` 就是从这里取的。
-             *
-             * 真机上「只出 1 个 token」的**真正**根因是另一件事：曾经把整段
-             * `history` 数组传给原生 `ResponseWithHistory()` —— 那条路径
-             * **不套 chat template**，模型收到的是没有 `<|im_start|>` 包装的裸文本。
-             * 详见 [com.mnnkit.app.llm.MnnLlmEngine.stream] 里的长注释。
-             */
+            /** Explicit context: false disables thinking where supported by the model. */
             enableThinking: Boolean = false,
         ): String {
             val passthroughKeys = setOf(
@@ -465,25 +460,8 @@ class MnnLlmSession internal constructor(
             fields["system_prompt"] = Json.Str(config.systemPrompt)
             fields["max_new_tokens"] = Json.Num(config.maxNewTokens.toDouble())
 
-            // ── 关闭「思考模式」 ──
-            //
-            // Qwen3 系的 chat template 在 `enable_thinking` 未显式给定时**默认为 true**，
-            // 于是模型会先输出一段思考（真机日志里是 `Thinkingthinking…`），
-            // 在手机上后果很严重：
-            //   * 思考内容占掉 max_new_tokens，正文经常还没开始就到上限；
-            //   * 实测出现过模型吐完思考标记就直接 `<eop>` 结束，
-            //     整轮只生成 1 个 token（日志：`decode_len=1 full_text=3 chars`）。
-            //
-            // 官方示例也是显式关掉的（`demo/apply_template.cpp:135`
-            // `extra_ctx["enable_thinking"] = false;`）。
-            //
-            // 只覆盖 `jinja.context.enable_thinking` 这一个字段，**不动 `chat_template`** ——
-            // 它由模型自带、经上面的透传保留。MNN 对 extra config 是深合并，
-            // 所以这里给部分对象不会把模板冲掉。
-            val jinja = fields["jinja"] as? Json.Obj
-            val jinjaFields = jinja?.fields?.toMutableMap() ?: mutableMapOf()
-            val ctx = jinjaFields["context"] as? Json.Obj
-            val ctxFields = ctx?.fields?.toMutableMap() ?: mutableMapOf()
+            val jinjaFields = (fields["jinja"] as? Json.Obj)?.fields?.toMutableMap() ?: mutableMapOf()
+            val ctxFields = (jinjaFields["context"] as? Json.Obj)?.fields?.toMutableMap() ?: mutableMapOf()
             ctxFields["enable_thinking"] = Json.Bool(enableThinking)
             jinjaFields["context"] = Json.Obj(ctxFields)
             fields["jinja"] = Json.Obj(jinjaFields)

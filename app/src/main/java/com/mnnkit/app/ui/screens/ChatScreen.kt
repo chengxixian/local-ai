@@ -70,6 +70,8 @@ import com.mnnkit.app.ui.theme.MnnRadii
 import com.mnnkit.app.ui.theme.MnnSpacing
 import com.mnnkit.app.ui.theme.MnnTextColor
 import com.mnnkit.core.model.ModelItem
+import com.mnnkit.core.chat.GenerationMetrics
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.Button
@@ -115,6 +117,9 @@ data class ChatMessageUi(
      * 里会夹进整段「让我想想…」的思考文字。界面上默认折叠，点标题可展开。
      */
     val reasoning: String? = null,
+    val generationMetrics: GenerationMetrics? = null,
+    /** Transient only: never restored as a still-running response. */
+    val isStreaming: Boolean = false,
 )
 
 /** 输入区浮层的高度预留（列表底部要给它让位，否则最后一条消息被盖住）。 */
@@ -193,7 +198,7 @@ fun ChatScreen(
                         MnnCard {
                             Text("开始对话", style = MiuixTheme.textStyles.title2)
                             Text(
-                                "所有推理都在本机完成，不会上传任何内容。\n" +
+                                "本机模型在设备上推理；API 模型会发送对话到所选服务。\n" +
                                     "记忆库里的事实会自动作为上下文注入（可在「记忆」页管理）。",
                                 style = MiuixTheme.textStyles.body2,
                                 color = MnnTextColor.secondary,
@@ -304,8 +309,9 @@ private fun MessageBubble(
     var zoomed by remember(msg) { mutableStateOf<String?>(null) }
 
     Box(Modifier.fillMaxWidth(), contentAlignment = align) {
+        Column(Modifier.fillMaxWidth(if (isUser) 0.86f else 0.94f)) {
         Card(
-            modifier = Modifier.fillMaxWidth(if (isUser) 0.86f else 0.94f),
+            modifier = Modifier.fillMaxWidth(),
             colors = if (isUser) {
                 CardDefaults.defaultColors(color = MiuixTheme.colorScheme.primaryContainer)
             } else {
@@ -379,7 +385,7 @@ private fun MessageBubble(
                     ReasoningBlock(
                         reasoning = reasoning,
                         // 正文还没开始 ⇒ 模型仍在思考阶段，标题显示「思考中…」。
-                        streaming = msg.text.isBlank(),
+                        streaming = msg.isStreaming && msg.text.isBlank(),
                     )
                 }
 
@@ -395,6 +401,27 @@ private fun MessageBubble(
                     )
                 }
             }
+        }
+        if (msg.role == "assistant") {
+            val metrics = msg.generationMetrics
+            val rate = when {
+                msg.isStreaming && msg.text.isBlank() && msg.reasoning.isNullOrBlank() -> "生成速度：等待生成…"
+                msg.isStreaming -> "生成速度：测量中…"
+                metrics != null -> {
+                    val source = if (metrics.source == GenerationMetrics.Source.NATIVE_DECODE) {
+                        "本机解码"
+                    } else "API 端到端（含网络与等待）"
+                    String.format(Locale.getDefault(), "%.1f tokens/s · %s", metrics.tokensPerSecond, source)
+                }
+                else -> "生成速度：不可用（未返回有效 token 统计）"
+            }
+            Text(
+                text = rate,
+                style = MiuixTheme.textStyles.footnote1,
+                color = MnnTextColor.secondary,
+                modifier = Modifier.padding(horizontal = MnnSpacing.tight, vertical = 4.dp),
+            )
+        }
         }
     }
 
@@ -680,13 +707,23 @@ fun GlassInputBar(
                 }
 
                 if (generating) {
-                    Button(onClick = onStop) { Text("停止生成") }
+                    MnnButton(
+                        onClick = onStop,
+                        style = MnnButtonStyle.Primary,
+                        content = {
+                            Text("停止生成")
+                        },
+                    )
                 } else {
-                    Button(
+                    MnnButton(
+
                         onClick = onSend,
                         enabled = input.text.isNotBlank() && canSend,
-                        colors = ButtonDefaults.buttonColorsPrimary(),
-                    ) { Text("发送") }
+                        style = MnnButtonStyle.Primary,
+                        content = {
+                            Text("发送")
+                        },
+                    )
                 }
             }
         }

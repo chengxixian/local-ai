@@ -78,6 +78,21 @@ public:
     void clearHistory(int numToKeep = 1);
 
     std::string dumpConfig() const;
+    /** Actual executor runtime map; not per-operator execution proof. */
+    std::string backendDiagnostics() const;
+
+    /**
+     * 把一段 JSON 合并进底层 Llm 的运行时配置（转发到 `Llm::set_config`）。
+     *
+     * 用途：在**不重新加载模型**的前提下改运行时开关。目前只用于
+     * 运行时关掉原生的模板渲染（`{"use_template":false}`）——
+     * 因为 prompt 已经在 Kotlin 侧渲染成 ChatML 了，
+     * 再让原生套一次模板会变成双重模板。
+     *
+     * 上游没有这个方法（它走 `updateConfigNative` 整体替换配置），
+     * 这里只做最小暴露：不解析、不保存，直接透传。
+     */
+    void setRuntimeConfig(const std::string& config_json);
 
 private:
     /** 上游 Response() 的流式主循环本体（prefill-only response(...,0) + generate(1) 步进
