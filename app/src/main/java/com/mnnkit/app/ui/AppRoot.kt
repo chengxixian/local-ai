@@ -33,6 +33,18 @@ import com.mnnkit.app.ui.screens.GlassInputBar
 import com.mnnkit.app.ui.screens.ModelsScreen
 import com.mnnkit.app.ui.screens.SettingsScreen
 import com.mnnkit.app.ui.screens.VoiceScreen
+// 「新对话」确认弹窗用到的基础布局与组件。
+// 注意 AppRoot 里其余 UI 都是拼各页的 Screen，所以这些是后加的。
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.Text
+import androidx.compose.ui.window.Dialog
+import com.mnnkit.app.ui.screens.MnnCapsuleButton
+import com.mnnkit.app.ui.theme.MnnTextColor
+import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 import com.mnnkit.app.ui.theme.MnnAccentColor
 import com.mnnkit.app.ui.theme.MnnTheme
 import com.mnnkit.core.chat.ChatMessage
@@ -79,6 +91,30 @@ fun AppRoot(container: AppContainer, modifier: Modifier = Modifier) {
     //     ConversationStore.isPersistable 会把它过滤掉。
     var lastConversationAt by remember { mutableStateOf(0L) }
     var restoring by remember { mutableStateOf(true) }
+
+    /** 顶栏「新对话」是否已经点了、正在等用户确认。 */
+    var confirmNewChat by remember { mutableStateOf(false) }
+
+    /**
+     * 开始新对话：清空界面上下文 **并清掉落盘的历史**。
+     *
+     * 只 `messages = emptyList()` 是不够的 —— 那样重启后
+     * [ConversationStore] 又会把旧对话恢复回来，用户会以为没清干净。
+     *
+     * 调用点：顶栏右上角「新对话」按钮（经确认弹窗）。
+     */
+    fun startNewChat() {
+        generateJob?.cancel()
+        generateJob = null
+        generating = false
+        messages = emptyList()
+        chatError = null
+        memoryNotice = null
+        lastConversationAt = 0L
+        scope.launch { container.llmEngine.resetContext() }
+        // 清磁盘放 IO：删文件虽然快，但没必要占主线程
+        scope.launch(Dispatchers.IO) { container.conversationStore.clear() }
+    }
 
     LaunchedEffect(Unit) {
         val snap = withContext(Dispatchers.IO) { container.conversationStore.load() }
@@ -513,6 +549,10 @@ fun AppRoot(container: AppContainer, modifier: Modifier = Modifier) {
             mcpCount = mcpState.connectedCount,
             tab = topTab,
             onTabChange = { topTab = it },
+            // 顶栏右上角「新对话」。**先弹确认框**，不直接清 ——
+            // 清空会同时删掉磁盘上的历史（不可撤销），一个误触就没了。
+            onNewChat = { confirmNewChat = true },
+            hasChat = messages.isNotEmpty(),
             // 玻璃浮层：输入区。它必须在采集层之外，所以走这个插槽，
             // 而不是画在 ChatScreen 里（那样会自引用崩溃）。
             glassOverlay = { overlayBackdrop ->
@@ -591,15 +631,6 @@ fun AppRoot(container: AppContainer, modifier: Modifier = Modifier) {
                         generateJob?.cancel()
                         generateJob = null
                         generating = false
-                    },
-                    onReset = {
-                        scope.launch { container.llmEngine.resetContext() }
-                        messages = emptyList()
-                        memoryNotice = null
-                        lastConversationAt = 0L
-                        // 「新话题」必须把落盘的历史也清掉 ——
-                        // 否则重启后旧对话又会被恢复回来，用户会以为没清干净。
-                        scope.launch(Dispatchers.IO) { container.conversationStore.clear() }
                     },
                     onSpeak = { text ->
                         // 朗读：合成 → 播放 → 把音频路径写回该条消息，让「下载音频」出现。
@@ -882,6 +913,67 @@ fun AppRoot(container: AppContainer, modifier: Modifier = Modifier) {
                 },
                 onDismiss = { showModelPicker = false },
             )
+        }
+
+        // ── 「新对话」确认框 ──
+        //
+        // 为什么要有这一步：点错一下就会**连磁盘上的历史一起删掉**，不可撤销。
+        // 按钮就在顶栏右上角，误触成本很低，所以加一道确认拦住。
+        if (confirmNewChat) {
+            NewChatConfirmDialog(
+                onConfirm = {
+                    confirmNewChat = false
+                    startNewChat()
+                },
+                onDismiss = { confirmNewChat = false },
+            )
+        }
+    }
+}
+
+/**
+ * 「新对话」确认弹窗。
+ *
+ * 文案里**明确写出「会删除本机保存的对话记录」** ——
+ * 只说「开始新对话」的话，用户不会意识到历史被删了，等发现时已经找不回来。
+ */
+@Composable
+private fun NewChatConfirmDialog(
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(Modifier.fillMaxWidth()) {
+            Column(
+                Modifier.padding(MnnSpacing.card),
+                verticalArrangement = Arrangement.spacedBy(MnnSpacing.item),
+            ) {
+                Text(
+                    "开始新对话？",
+                    style = MiuixTheme.textStyles.headline2,
+                    color = MnnTextColor.primary,
+                )
+                Text(
+                    "当前对话会从本机清除，包括启动时自动恢复的历史记录。" +
+                        "此操作不可撤销。",
+                    style = MiuixTheme.textStyles.body2,
+                    color = MnnTextColor.secondary,
+                )
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(
+                        MnnSpacing.tight,
+                        androidx.compose.ui.Alignment.End,
+                    ),
+                ) {
+                    MnnCapsuleButton(text = "取消", onClick = onDismiss)
+                    MnnCapsuleButton(
+                        text = "清除并新建",
+                        onClick = onConfirm,
+                        emphasized = true,
+                    )
+                }
+            }
         }
     }
 }

@@ -139,7 +139,6 @@ fun ChatScreen(
     activeModelLabel: String?,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
-    onReset: () -> Unit,
     onSpeak: (String) -> Unit,
     onDownloadImage: (String) -> Unit,
     onDownloadAudio: (String) -> Unit,
@@ -182,7 +181,6 @@ fun ChatScreen(
                 Box(Modifier.staggeredEntry(0)) {
                     ActiveModelCard(
                         state = state,
-                        onReset = onReset,
                         onOpenModelPicker = onOpenModelPicker,
                         activeModelLabel = activeModelLabel,
                     )
@@ -232,7 +230,6 @@ fun ChatScreen(
 @Composable
 private fun ActiveModelCard(
     state: ChatUiState,
-    onReset: () -> Unit,
     onOpenModelPicker: () -> Unit,
     activeModelLabel: String?,
 ) {
@@ -244,9 +241,10 @@ private fun ActiveModelCard(
             leading = Icons.Rounded.Memory,
             trailing = {
                 Row(horizontalArrangement = Arrangement.spacedBy(MnnSpacing.tight)) {
-                    if (state.loadedModelPath != null) {
-                        MnnCapsuleButton(text = "新话题", onClick = onReset)
-                    }
+                    // 这里原来有一个「新话题」按钮，但只在 loadedModelPath != null
+                    // （也就是只有本地模型）时显示 —— 用 API 时用户根本看不到它。
+                    // 现在统一收到顶栏右上角的「新对话」，对本地/API 两条路径都可见，
+                    // 所以卡片里不再重复放一个同名按钮。
                     // ⚠️ 这里**不用** miuix 的 `Button`。
                     //
                     // miuix 的 `Button` 会**覆盖子内容的文字色** ——
