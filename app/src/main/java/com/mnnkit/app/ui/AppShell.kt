@@ -38,12 +38,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.dp
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.mnnkit.app.ui.glass.AppBackground
 import com.mnnkit.app.ui.glass.GlassNavBarContent
 import com.mnnkit.app.ui.glass.LocalGlassBackdrop
+import com.mnnkit.app.ui.glass.LocalTopBarInset
+import com.mnnkit.app.ui.glass.glassTopBar
 import com.mnnkit.app.ui.glass.glassNavBar
 import com.mnnkit.app.ui.glass.rememberGlassBackdrop
 import com.mnnkit.app.ui.screens.MnnCapsuleButton
@@ -217,64 +220,19 @@ fun AppShell(
     }
 
     Box(Modifier.fillMaxSize()) {
-        CompositionLocalProvider(LocalGlassBackdrop provides glassBackdrop) {
+        // 顶栏（玻璃额头）改成自己摆的浮层，所以要把量出来的高度告诉各页 —— 见 LocalTopBarInset。
+        var topBarHeight by remember { mutableStateOf(0.dp) }
+        val density = LocalDensity.current
+        CompositionLocalProvider(
+            LocalGlassBackdrop provides glassBackdrop,
+            LocalTopBarInset provides topBarHeight,
+        ) {
             Scaffold(
                 // 背景由采集层画；Scaffold 不能再铺不透明底，否则会盖住采集层
                 containerColor = Color.Transparent,
-                topBar = {
-                    // 顶栏**不透明**，取 surfaceContainer（与卡片同色）。
-                    // 曾经试过让顶栏也半透明：只要有一点透明度，
-                    // 下方滚动的深色文字就会渗上来变成灰蒙蒙的一片。
-                    // 玻璃感全部交给底栏 —— 那里有折射，效果才明显。
-                    SmallTopAppBar(
-                        title = tab.title,
-                        subtitle = subtitle,
-                        modifier = Modifier.background(MiuixTheme.colorScheme.surfaceContainer),
-                        color = Color.Transparent,
-                        // 右上角「新对话」。
-                        //
-                        // ⚠️ 这里**不能**用 miuix 的 `IconButton` / `Button`：
-                        // 它们的子内容颜色由主题的 on* 配色决定，而 miuix 的
-                        // `Colors` 由 ThemeController 内部构造、外部覆盖不了 ——
-                        // 真机上出现过「灰字配浅底」看不清（见 MnnButtons.kt 的长注释）。
-                        // 所以顶栏这个按钮也自己画，配色显式给定。
-                        // 右上角「新对话」。
-                        //
-                        // ⚠️ 槽位的**参数名是 `actions`**，不是 `trailing`。
-                        // miuix 的 `SmallTopAppBar` 完整签名（从 AAR 的
-                        // Kotlin metadata 里读出来的）是：
-                        //   title, modifier, color, titleColor, subtitle,
-                        //   subtitleColor, navigationIcon, actions, scrollBehavior,
-                        //   defaultWindowInsetsPadding, titlePadding,
-                        //   navigationIconPadding, actionIconPadding, bottomContent
-                        // 写成 `trailing = {...}` 不会报"没有这个参数"，而是被当成
-                        // 后面某个位置参数，于是 lambda 落到 `bottomContent` 那个
-                        // **非 @Composable** 的槽里，报：
-                        //   "@Composable invocations can only happen from the context
-                        //    of a @Composable function"
-                        // 这种"参数错位"型的错误信息完全不提参数名，很容易查错方向。
-                        //
-                        // ⚠️ 也**不能**用 miuix 的 `IconButton` / `Button`：它们的
-                        // 子内容颜色由主题 on* 配色决定，而 miuix 的 `Colors` 由
-                        // ThemeController 内部构造、外部覆盖不了 —— 真机上出现过
-                        // 「灰字配浅底」看不清（见 MnnButtons.kt 的长注释）。
-                        // 所以这个按钮也自己画，配色显式给定。
-                        actions = {
-                            if (tab == TopTab.Chat) {
-                                MnnCapsuleButton(text = "历史", onClick = onChatHistory)
-                            }
-                            if (tab == TopTab.Chat && hasChat) {
-                                MnnCapsuleButton(
-                                    text = "新对话",
-                                    onClick = {
-                                        android.util.Log.i("LocalAI-Gen", "顶栏「新对话」被点击")
-                                        onNewChat()
-                                    },
-                                )
-                            }
-                        },
-                    )
-                },
+                // 顶栏（玻璃额头）不再占用 Scaffold 的槽位，改成本文件下方的玻璃浮层：
+                // 它既要在采集层**之外**（否则玻璃录到自己 → 渲染树递归闪退），
+                // 又要**浮在页面之上**（否则内容无法从玻璃下穿过，折射就看不见）。
             ) { padding ->
                 val layoutDirection = LocalLayoutDirection.current
                 // 内容**不用**为底栏让出高度：列表要能滚到 dock 下方去，
@@ -314,12 +272,64 @@ fun AppShell(
                             },
                             label = "page",
                         ) { page ->
-                            Box(Modifier.fillMaxSize().padding(contentPadding)) {
+                            // ⚠️ 故意**不**应用 contentPadding 的 top：页面必须从 y=0 开始画，
+                            // 滚动时内容从玻璃额头**下面穿过**，玻璃才有东西可折射、才不是
+                            // 一块糊在纯色上的塑料板。第一条内容的可见性由各页把
+                            // LocalTopBarInset 加进自己 LazyColumn 的 contentPadding.top 负责。
+                            Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .padding(
+                                        start = contentPadding.calculateStartPadding(layoutDirection),
+                                        end = contentPadding.calculateEndPadding(layoutDirection),
+                                        bottom = contentPadding.calculateBottomPadding(),
+                                    )
+                            ) {
                                 content(page)
                             }
                         }
                     }
 
+                    // ── 液态玻璃额头（顶栏）──
+                    // 与采集层是**兄弟**：它在采集层之外，所以不会录到自己（自引用）。
+                    // 位置贴顶、整幅宽度；玻璃底板只圆下沿，上沿与状态栏齐平。
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .fillMaxWidth()
+                            .onSizeChanged { topBarHeight = with(density) { it.height.toDp() } }
+                    ) {
+                        // ① 玻璃底板：**只有玻璃、不含任何子内容**。
+                        // 库的绘制顺序把子内容画进玻璃那层的裁剪里，所以底板必须是空 Box。
+                        Box(
+                            modifier = Modifier
+                                .matchParentSize()
+                                .glassTopBar(backdrop = glassBackdrop),
+                        )
+                        // ② 内容层：与玻璃是兄弟，画在玻璃之上。
+                        //    title / subtitle / actions 与改造前完全一致。
+                        SmallTopAppBar(
+                            title = tab.title,
+                            subtitle = subtitle,
+                            modifier = Modifier.fillMaxWidth(),
+                            // 底色交给自己画的玻璃；这里必须全透明，否则会把玻璃盖住。
+                            color = Color.Transparent,
+                            actions = {
+                                if (tab == TopTab.Chat) {
+                                    MnnCapsuleButton(text = "历史", onClick = onChatHistory)
+                                }
+                                if (tab == TopTab.Chat && hasChat) {
+                                    MnnCapsuleButton(
+                                        text = "新对话",
+                                        onClick = {
+                                            android.util.Log.i("LocalAI-Gen", "顶栏「新对话」被点击")
+                                            onNewChat()
+                                        },
+                                    )
+                                }
+                            },
+                        )
+                    }
                     // ── 玻璃浮层插槽（例如输入框）──
                     // 和底栏一样在**采集层之外**，所以它采样到的是「页面内容」整层，
                     // 能真实地糊到下方滚动过去的内容，而不会自引用。

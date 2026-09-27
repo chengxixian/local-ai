@@ -44,6 +44,7 @@ import com.mnnkit.app.ui.MnnCard
 import com.mnnkit.app.ui.MnnInfoRow
 import com.mnnkit.app.ui.MnnListItem
 import com.mnnkit.app.ui.MnnStatusBanner
+import com.mnnkit.app.ui.glass.LocalTopBarInset
 import com.mnnkit.app.ui.staggeredEntry
 import com.mnnkit.app.ui.theme.MnnAccentColor
 import com.mnnkit.app.ui.theme.MnnSpacing
@@ -72,7 +73,7 @@ fun FeatureScreen(
     contentPadding: PaddingValues = PaddingValues(
         start = MnnSpacing.page,
         end = MnnSpacing.page,
-        top = MnnSpacing.page,
+        top = MnnSpacing.page + LocalTopBarInset.current,
         // 底部留出悬浮 dock 的高度，滚到底时最后一项不被遮挡。
         bottom = MnnSpacing.page + DockClearance,
     ),
@@ -132,7 +133,7 @@ fun VoiceScreen(
     contentPadding: PaddingValues = PaddingValues(
         start = MnnSpacing.page,
         end = MnnSpacing.page,
-        top = MnnSpacing.page,
+        top = MnnSpacing.page + LocalTopBarInset.current,
         // 底部留出悬浮 dock 的高度，滚到底时最后一项不被遮挡。
         bottom = MnnSpacing.page + DockClearance,
     ),
@@ -304,7 +305,7 @@ fun SettingsScreen(
     contentPadding: PaddingValues = PaddingValues(
         start = MnnSpacing.page,
         end = MnnSpacing.page,
-        top = MnnSpacing.page,
+        top = MnnSpacing.page + LocalTopBarInset.current,
         // 底部留出悬浮 dock 的高度，滚到底时最后一项不被遮挡。
         bottom = MnnSpacing.page + DockClearance,
     ),
@@ -596,7 +597,7 @@ fun MemoryScreen(
     contentPadding: PaddingValues = PaddingValues(
         start = MnnSpacing.page,
         end = MnnSpacing.page,
-        top = MnnSpacing.page,
+        top = MnnSpacing.page + LocalTopBarInset.current,
         // 底部留出悬浮 dock 的高度，滚到底时最后一项不被遮挡。
         bottom = MnnSpacing.page + DockClearance,
     ),

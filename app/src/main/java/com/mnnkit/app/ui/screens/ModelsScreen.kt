@@ -58,6 +58,7 @@ import com.mnnkit.app.ui.MnnListItem
 import com.mnnkit.app.ui.MnnPill
 import com.mnnkit.app.ui.MnnProgress
 import com.mnnkit.app.ui.MnnStatusBanner
+import com.mnnkit.app.ui.glass.LocalTopBarInset
 import com.mnnkit.app.ui.staggeredEntry
 import com.mnnkit.app.ui.theme.MnnRadii
 import com.mnnkit.app.ui.theme.MnnSpacing
@@ -93,7 +94,7 @@ fun ModelsScreen(
     contentPadding: PaddingValues = PaddingValues(
         start = MnnSpacing.page,
         end = MnnSpacing.page,
-        top = MnnSpacing.page,
+        top = MnnSpacing.page + LocalTopBarInset.current,
         // 底部留出悬浮 dock 的高度，滚到底时最后一项不被遮挡。
         bottom = MnnSpacing.page + DockClearance,
     ),

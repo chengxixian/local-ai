@@ -64,6 +64,7 @@ import com.mnnkit.app.ui.DockClearance
 import com.mnnkit.app.ui.MnnCard
 import com.mnnkit.app.ui.MnnListItem
 import com.mnnkit.app.ui.MnnStatusBanner
+import com.mnnkit.app.ui.glass.LocalTopBarInset
 import com.mnnkit.app.ui.glass.liquidGlass
 import com.mnnkit.app.ui.staggeredEntry
 import com.mnnkit.app.ui.theme.MnnRadii
@@ -178,7 +179,7 @@ fun ChatScreen(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
                 start = contentPadding.calculateStartPadding(layoutDirection),
-                top = contentPadding.calculateTopPadding(),
+                top = contentPadding.calculateTopPadding() + LocalTopBarInset.current,
                 end = contentPadding.calculateEndPadding(layoutDirection),
                 bottom = contentPadding.calculateBottomPadding() + InputBarReservedHeight,
             ),

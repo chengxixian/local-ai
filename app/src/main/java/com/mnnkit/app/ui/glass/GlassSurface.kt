@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
@@ -78,6 +79,17 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /** backdrop 的采集源（底栏的折射、模糊用）。 */
 val LocalGlassBackdrop = staticCompositionLocalOf<LayerBackdrop?> { null }
+
+/**
+ * 顶栏（「额头」）玻璃的**总高度，含状态栏 inset**，由 `AppShell` 量出来后提供。
+ *
+ * 为什么需要它：玻璃顶栏必须**浮在采集层之上**（放进采集层就会录到自己 →
+ * 渲染树递归 → 本机实测黑屏闪退），因此 `Scaffold` 不再用 `topBar` 槽位给它预留高度，
+ * 页面从 y=0 开始画、滚动时从玻璃底下穿过去 —— 这样玻璃才有东西可折射。
+ * 代价是各页必须把这个高度加进自己 `LazyColumn` 的 `contentPadding.top`，
+ * 否则第一条内容会被玻璃永久盖住。
+ */
+val LocalTopBarInset = compositionLocalOf { 0.dp }
 
 /**
  * 应用背景。
@@ -168,6 +180,29 @@ private fun rememberGrainBrush(): ShaderBrush = remember {
 fun Modifier.glassNavBar(
     backdrop: LayerBackdrop? = LocalGlassBackdrop.current,
     shape: Shape = RoundedCornerShape(50),
+    blurRadius: Dp = GlassRegularBlurRadius,
+    fallbackColor: Color = MiuixTheme.colorScheme.surfaceContainer,
+): Modifier = liquidGlass(
+    backdrop = backdrop,
+    shape = shape,
+    blurRadius = blurRadius,
+    fallbackColor = fallbackColor,
+)
+
+/**
+ * 顶栏（「额头」）的液态玻璃。
+ *
+ * 与 [glassNavBar] 只有形状不同：顶栏贴屏幕顶边，所以**只圆下沿**，
+ * 上沿与状态栏齐平。折射 / 模糊 / 填充 / 颗粒的取值全部沿用同一套，
+ * 视觉上才和底栏是同一块玻璃，而不是两种材质。
+ *
+ * ⚠️ 与 dock 相同的结构约束：这个修饰符必须挂在**不含子内容**的 Box 上，
+ * 内容层要做它的**兄弟**。
+ */
+@Composable
+fun Modifier.glassTopBar(
+    backdrop: LayerBackdrop? = LocalGlassBackdrop.current,
+    shape: Shape = RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp),
     blurRadius: Dp = GlassRegularBlurRadius,
     fallbackColor: Color = MiuixTheme.colorScheme.surfaceContainer,
 ): Modifier = liquidGlass(

@@ -116,5 +116,7 @@ private:
     std::string system_prompt_;
     json current_config_{};
     std::string last_load_error_{};
+    /** Last synchronous response's per-backend dispatch/completion counters, if available. */
+    json last_execution_evidence_ = nullptr;
 };
 }

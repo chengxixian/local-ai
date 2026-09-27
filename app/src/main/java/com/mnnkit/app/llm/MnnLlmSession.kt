@@ -428,6 +428,15 @@ class MnnLlmSession internal constructor(
             backendType: String? = null,
             /** Explicit context: false disables thinking where supported by the model. */
             enableThinking: Boolean = false,
+            /**
+             * 是否采集**逐算子执行证据**（MNN 的 `MNNExecutionEvidence*` 计数）。
+             *
+             * 默认关闭：采集会给 OpenCL 每次 Pipeline 末尾插入一次阻塞 `finish()`，
+             * 会拖慢推理，**不能**用它做性能对比。只有隔离的硬件探针才打开。
+             * C++ 侧读取同一个键：`llm_session.cpp` 的
+             * `config_.value("mnnkit_capture_execution_evidence", false)`。
+             */
+            captureExecutionEvidence: Boolean = false,
         ): String {
             val passthroughKeys = setOf(
                 "llm_model", "llm_weight", "backend_type", "thread_num", "precision",
@@ -467,6 +476,8 @@ class MnnLlmSession internal constructor(
             fields["jinja"] = Json.Obj(jinjaFields)
             fields["keep_history"] = Json.Bool(keepHistory)
             fields["mmap_dir"] = Json.Str(mmapDir)
+            // 逐算子证据采集开关；正常 App 恒为 false（见该参数文档）。
+            fields["mnnkit_capture_execution_evidence"] = Json.Bool(captureExecutionEvidence)
             // 采样参数只在模型 config 未提供时兜底，避免覆盖模型自带的最优设置。
             fields.putIfAbsent("sampler_type", Json.Str(config.samplerType))
             fields.putIfAbsent("temperature", Json.Num(config.temperature))

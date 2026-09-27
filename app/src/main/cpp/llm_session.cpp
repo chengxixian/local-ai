@@ -30,6 +30,8 @@
 #include <algorithm>
 #include <cctype>
 #include <sstream>
+#include <dlfcn.h>
+#include "MNN/ExecutionEvidence.h"
 #include "MNN/MNNForwardType.h"
 #include "MNN/expr/ExecutorScope.hpp"
 #include "mls_log.h"
@@ -128,6 +130,36 @@ void resolveAndroidSteppingEop(
         stream_state.finalizePendingEop();
     }
 }
+
+/** Ends optional MNN Pipeline evidence on this same native thread on every exit. */
+class ExecutionEvidenceCapture {
+public:
+    using Begin = int (*)();
+    using End = int (*)(MNNExecutionEvidenceV1*, uint32_t);
+
+    explicit ExecutionEvidenceCapture(bool enabled) {
+        if (!enabled) return;
+        auto begin = reinterpret_cast<Begin>(dlsym(RTLD_DEFAULT, "MNNExecutionEvidenceBegin"));
+        mEnd = reinterpret_cast<End>(dlsym(RTLD_DEFAULT, "MNNExecutionEvidenceEnd"));
+        mActive = begin != nullptr && mEnd != nullptr && begin() == 0;
+    }
+
+    ~ExecutionEvidenceCapture() { finish(); }
+    ExecutionEvidenceCapture(const ExecutionEvidenceCapture&) = delete;
+    ExecutionEvidenceCapture& operator=(const ExecutionEvidenceCapture&) = delete;
+
+    bool finish() {
+        if (!mActive) return false;
+        mActive = false;
+        return mEnd(&snapshot, sizeof(snapshot)) == 0;
+    }
+
+    MNNExecutionEvidenceV1 snapshot{};
+
+private:
+    End mEnd = nullptr;
+    bool mActive = false;
+};
 
 } // namespace
 
@@ -333,6 +365,9 @@ const MNN::Transformer::LlmContext * LlmSession::RunResponse(
     }
     MNN_DEBUG("submitNative messages=%zu max_new_tokens=%d", history_.size(), max_new_tokens_);
 
+    last_execution_evidence_ = nullptr;
+    // Optional symbols preserve compatibility with the original MNN runtime.
+    ExecutionEvidenceCapture evidenceCapture(config_.value("mnnkit_capture_execution_evidence", false));
     restoreAndroidSteppingStatusIfNeeded(llm_);
     // Prefill only. Stepping decode one token at a time via llm_->generate(1) keeps
     // streaming active without letting the engine mark the session as finished up front.
@@ -379,6 +414,25 @@ const MNN::Transformer::LlmContext * LlmSession::RunResponse(
     // 「用户取消 / 达到 max_new_tokens」时也需要把已生成内容交回 Kotlin 侧，
     // 因此这里统一从 response_buffer 落一份。
     response_string_for_debug = response_buffer.str();
+    if (evidenceCapture.finish()) {
+        const auto& evidence = evidenceCapture.snapshot;
+        json backendCounts = json::object();
+        for (unsigned i = 0; i < MNN_EXECUTION_EVIDENCE_SLOTS; ++i) {
+            if (!evidence.successful[i] && !evidence.copies[i] && !evidence.backendErrors[i]) continue;
+            backendCounts[std::to_string(i)] = {
+                {"successful_dispatches", evidence.successful[i]},
+                {"completed_dispatches", evidence.completed[i]},
+                {"unconfirmed_dispatches", evidence.unconfirmed[i]},
+                {"sync_failed_dispatches", evidence.syncFailed[i]},
+                {"copies", evidence.copies[i]},
+                {"backend_errors", evidence.backendErrors[i]},
+            };
+        }
+        last_execution_evidence_ = {
+            {"kind", "instrumented_pipeline_dispatch_and_opencl_queue_sync"},
+            {"backend_counts", backendCounts},
+        };
+    }
     float prefill_s = context->prefill_us / 1e6f;
     float decode_s = context->decode_us / 1e6f;
     float prefill_tps = (prefill_s > 0) ? context->prompt_len / prefill_s : 0;
@@ -453,6 +507,16 @@ std::string LlmSession::backendDiagnostics() const {
     report["executor_runtime_backends"] = json::array();
     report["execution_backend_verified"] = false;
     report["evidence_kind"] = "created_runtime_not_per_operator_execution";
+    if (!last_execution_evidence_.is_null()) {
+        report["execution_evidence"] = last_execution_evidence_;
+        report["evidence_kind"] = "instrumented_pipeline_dispatch_and_opencl_queue_sync";
+        const auto& counts = last_execution_evidence_["backend_counts"];
+        if (counts.contains("3") && counts["3"].value("completed_dispatches", 0ULL) > 0) {
+            // Confirmation is limited to MNN Pipeline dispatch and queue completion,
+            // not physical kernel utilization or all execution outside Pipeline.
+            report["execution_backend_verified"] = true;
+        }
+    }
     if (llm_ != nullptr && llm_->getExecutor()) {
         MNN::Express::ExecutorScope scope(llm_->getExecutor());
         const auto runtime = MNN::Express::Executor::getRuntime();

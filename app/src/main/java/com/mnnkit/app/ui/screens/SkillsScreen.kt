@@ -37,6 +37,7 @@ import com.mnnkit.app.ui.MnnCard
 import com.mnnkit.app.ui.MnnEmptyState
 import com.mnnkit.app.ui.MnnListItem
 import com.mnnkit.app.ui.MnnStatusBanner
+import com.mnnkit.app.ui.glass.LocalTopBarInset
 import com.mnnkit.app.ui.staggeredEntry
 import com.mnnkit.app.ui.theme.MnnSpacing
 import top.yukonga.miuix.kmp.basic.TextField
@@ -49,7 +50,7 @@ fun SkillsScreen(
     skillManager: SkillManager,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(
-        start = MnnSpacing.page, end = MnnSpacing.page, top = MnnSpacing.page,
+        start = MnnSpacing.page, end = MnnSpacing.page, top = MnnSpacing.page + LocalTopBarInset.current,
         bottom = MnnSpacing.page + DockClearance,
     ),
 ) {

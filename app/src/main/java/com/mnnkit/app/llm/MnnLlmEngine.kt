@@ -27,6 +27,8 @@ class MnnLlmEngine(
     private val enableThinking: Boolean = true,
     private val backendProvider: (() -> String?)? = null,
     private val thinkingProvider: (() -> Boolean)? = null,
+    /** 只给隔离的硬件探针用：打开逐算子执行证据采集（会拖慢推理，见 MnnLlmSession）。 */
+    private val captureExecutionEvidence: Boolean = false,
 ) : LlmEngine {
     private val session = MnnLlmSession(libraryLoader)
     private val nativeMutex = Mutex()
@@ -57,6 +59,7 @@ class MnnLlmEngine(
         val runtimeConfig = MnnLlmSession.buildRuntimeConfigJson(
             modelConfigText, config, keepHistory = true, mmapDir = "",
             backendType = requestedBackend, enableThinking = effectiveThinking(),
+            captureExecutionEvidence = captureExecutionEvidence,
         )
         nativeMutex.withLock {
             session.release()
