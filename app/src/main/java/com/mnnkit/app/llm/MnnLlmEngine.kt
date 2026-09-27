@@ -51,6 +51,9 @@ class MnnLlmEngine(
         // Do not rewrite downloaded model files or restore stale backups behind the user's back.
         val modelConfigText = configFile.readText()
         val requestedBackend = backendProvider?.invoke() ?: backendType
+        require(requestedBackend != "npu") {
+            "当前 APK 的 NPU 选项未接通：真机请求 npu 时仅创建 CPU 运行时。请在设置中选择 CPU 或 OpenCL；普通 MNN 模型不能仅靠切换选项启用 NPU。"
+        }
         val runtimeConfig = MnnLlmSession.buildRuntimeConfigJson(
             modelConfigText, config, keepHistory = true, mmapDir = "",
             backendType = requestedBackend, enableThinking = effectiveThinking(),

@@ -389,7 +389,9 @@ fun SettingsScreen(
                     // ── 后端选择：CPU / GPU / NPU ──
                     Text("计算后端", style = MiuixTheme.textStyles.title2)
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(MnnSpacing.inline)) {
-                        items(InferenceBackend.entries.toList(), key = { it.id }) { backend ->
+                        // This APK reports CPU runtime even when NPU was requested;
+                        // do not present an unverified accelerator as selectable.
+                        items(InferenceBackend.entries.filter { it != InferenceBackend.NPU }, key = { it.id }) { backend ->
                             val selected = backend.id == settings.backendType
                             Card(
                                 modifier = Modifier.clickable {
@@ -410,7 +412,9 @@ fun SettingsScreen(
                         }
                     }
                     Text(
-                        InferenceBackend.fromId(settings.backendType).note,
+                        if (settings.backendType == InferenceBackend.NPU.id)
+                            "当前 APK 尚未验证 NPU 支持：真机选择 NPU 时 MNN 仅报告 CPU 运行时。请切换 CPU / OpenCL / Vulkan 并重新加载模型。"
+                        else InferenceBackend.fromId(settings.backendType).note,
                         style = MiuixTheme.textStyles.footnote1,
                         color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     )

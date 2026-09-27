@@ -492,10 +492,22 @@ fun AppRoot(container: AppContainer, modifier: Modifier = Modifier) {
                         updateAssistant(acc.toString(), think.toString().ifBlank { null })
                     }
                 } else {
+                    val rawLocal = StringBuilder()
+                    val implicitThinking = settings.thinkingEffort != "none" &&
+                        container.llmEngine.loadedModel?.let { model ->
+                            listOf(model.id, model.displayName, model.repoId).any {
+                                it.contains("qwen3", ignoreCase = true)
+                            }
+                        } == true
                     container.llmEngine.stream(full, config).collect { chunk ->
                         ensureActive()
-                        acc.append(chunk)
-                        updateAssistant(acc.toString(), null)
+                        rawLocal.append(chunk)
+                        val parsed = com.mnnkit.core.chat.LocalThinkingParser.split(
+                            rawLocal.toString(), implicitOpen = implicitThinking,
+                        )
+                        acc.clear().append(parsed.text)
+                        think.clear().append(parsed.reasoning.orEmpty())
+                        updateAssistant(acc.toString(), think.toString().ifBlank { null })
                     }
                     finalMetrics = container.llmEngine.lastGenerationMetrics
                 }

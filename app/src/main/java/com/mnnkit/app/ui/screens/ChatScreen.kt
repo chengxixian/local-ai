@@ -164,9 +164,11 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     val layoutDirection = LocalLayoutDirection.current
 
-    LaunchedEffect(state.messages.size, state.messages.lastOrNull()?.text?.length) {
+    // Scroll only when a new message arrives. Re-running for every streamed token
+    // overrides the user's drag and snaps long answers back to their first line.
+    LaunchedEffect(state.messages.size) {
         if (state.messages.isNotEmpty()) {
-            listState.animateScrollToItem(state.messages.size - 1)
+            listState.animateScrollToItem(state.messages.size) // model card occupies index 0
         }
     }
 
